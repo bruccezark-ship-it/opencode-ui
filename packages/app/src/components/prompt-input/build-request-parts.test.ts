@@ -393,4 +393,35 @@ describe("buildRequestParts", () => {
       expect(filePart.url).toContain("/..")
     }
   })
+
+  test("includes preview element context as synthetic text", () => {
+    const result = buildRequestParts({
+      prompt: [{ type: "text", content: "update button", start: 0, end: 13 }],
+      context: [
+        {
+          key: "preview:1",
+          type: "preview",
+          url: "http://localhost:5173",
+          selector: "button.primary",
+          tagName: "button",
+          text: "Save",
+        },
+      ],
+      images: [],
+      text: "update button",
+      messageID: "msg_preview",
+      sessionID: "ses_preview",
+      sessionDirectory: "/repo",
+    })
+
+    expect(
+      result.requestParts.some(
+        (part) =>
+          part.type === "text" &&
+          part.synthetic &&
+          part.text.includes("button.primary") &&
+          part.metadata?.opencodePreviewElement,
+      ),
+    ).toBe(true)
+  })
 })

@@ -35,7 +35,7 @@ export const createSessionTabs = (input: TabsInput) => {
         .tabs()
         .all()
         .flatMap((tab) => {
-          if (tab === "context" || tab === "review") return []
+          if (tab === "context" || tab === "review" || tab === "preview") return []
           const value = input.pathFromTab(tab) ? input.normalizeTab(tab) : tab
           if (seen.has(value)) return []
           seen.add(value)
@@ -49,6 +49,7 @@ export const createSessionTabs = (input: TabsInput) => {
     const active = input.tabs().active()
     if (active === "context") return active
     if (active === "review" && review()) return active
+    if (active === "preview" && review()) return active
     if (active && input.pathFromTab(active)) return input.normalizeTab(active)
 
     const first = openedTabs()[0]

@@ -125,6 +125,27 @@ describe("createSessionTabs", () => {
     })
   })
 
+  test("resolves preview pseudo tab", () => {
+    createRoot((dispose) => {
+      const [state] = createStore({
+        active: "preview" as string | undefined,
+        all: [] as string[],
+      })
+      const tabs = createMemo(() => ({ active: () => state.active, all: () => state.all }))
+      const result = createSessionTabs({
+        tabs,
+        pathFromTab: () => undefined,
+        normalizeTab: (tab) => tab,
+        review: () => true,
+        hasReview: () => false,
+      })
+
+      expect(result.activeTab()).toBe("preview")
+      expect(result.openedTabs()).toEqual([])
+      dispose()
+    })
+  })
+
   test("prefers context and review fallbacks when no file tab is active", () => {
     createRoot((dispose) => {
       const [state] = createStore({

@@ -3,21 +3,14 @@ import { type AgentPartInput, type FilePartInput, type Part, type TextPartInput 
 import type { FileSelection } from "@/context/file"
 import { encodeFilePath } from "@/context/file/path"
 import type { AgentPart, FileAttachmentPart, ImageAttachmentPart, Prompt } from "@/context/prompt"
+import type { ContextItem } from "@/context/prompt"
+import { formatPreviewElementNote } from "@/pages/session/preview-inspector"
 import { Identifier } from "@/utils/id"
 import { createCommentMetadata, formatCommentNote } from "@/utils/comment-note"
 
 type PromptRequestPart = (TextPartInput | FilePartInput | AgentPartInput) & { id: string }
 
-type ContextFile = {
-  key: string
-  type: "file"
-  path: string
-  selection?: FileSelection
-  comment?: string
-  commentID?: string
-  commentOrigin?: "review" | "file"
-  preview?: string
-}
+type ContextFile = ContextItem & { key: string }
 
 type BuildRequestPartsInput = {
   prompt: Prompt
@@ -142,6 +135,20 @@ export function buildRequestParts(input: BuildRequestPartsInput) {
 
   const used = new Set(files.map((part) => part.url))
   const context = input.context.flatMap((item) => {
+    if (item.type === "preview") {
+      return [
+        {
+          id: Identifier.ascending("part"),
+          type: "text",
+          text: formatPreviewElementNote(item),
+          synthetic: true,
+          metadata: {
+            opencodePreviewElement: item,
+          },
+        } satisfies PromptRequestPart,
+      ]
+    }
+
     const path = absolute(input.sessionDirectory, item.path)
     const url = `file://${encodeFilePath(path)}${fileQuery(item.selection)}`
     const comment = item.comment?.trim()

@@ -61,7 +61,18 @@ export type FileContextItem = {
   preview?: string
 }
 
-export type ContextItem = FileContextItem
+export type PreviewContextItem = {
+  type: "preview"
+  url: string
+  selector: string
+  tagName: string
+  id?: string
+  className?: string
+  text?: string
+  html?: string
+}
+
+export type ContextItem = FileContextItem | PreviewContextItem
 
 export const DEFAULT_PROMPT: Prompt = [{ type: "text", content: "", start: 0, end: 0 }]
 
@@ -120,6 +131,9 @@ function clonePrompt(prompt: Prompt): Prompt {
 }
 
 function contextItemKey(item: ContextItem) {
+  if (item.type === "preview") {
+    return `preview:${item.url}:${item.selector}:${item.html ?? ""}`.slice(0, 160)
+  }
   if (item.type !== "file") return item.type
   const start = item.selection?.startLine
   const end = item.selection?.endLine

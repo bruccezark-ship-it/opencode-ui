@@ -17,6 +17,8 @@ import { SessionContextUsage } from "@/components/session-context-usage"
 
 const reviewTabID = "session-side-panel-review-tab"
 const reviewTabPanelID = "session-side-panel-review-tabpanel"
+const previewTabID = "session-side-panel-preview-tab"
+const previewTabPanelID = "session-side-panel-preview-tabpanel"
 import { SessionContextTab, SortableTab, FileVisual } from "@/components/session"
 import { useCommand } from "@/context/command"
 import { useFile, type SelectedLineRange } from "@/context/file"
@@ -26,6 +28,7 @@ import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
 import { createFileTabListSync } from "@/pages/session/file-tab-scroll"
 import { FileTabContent } from "@/pages/session/file-tabs"
+import { SessionPreviewTab } from "@/pages/session/preview-tab"
 import {
   createOpenSessionFileTab,
   createSessionTabs,
@@ -164,6 +167,10 @@ export function SessionSidePanel(props: {
     (previous) => previous || (reviewOpen() && activeTab() === "review"),
     false,
   )
+  const previewContentRendered = createMemo<boolean>(
+    (previous) => previous || (reviewOpen() && activeTab() === "preview"),
+    false,
+  )
 
   const fileTreeTab = () => layout.fileTree.tab()
 
@@ -286,6 +293,13 @@ export function SessionSidePanel(props: {
                               </Show>
                             </div>
                           </Tabs.Trigger>
+                          <Tabs.Trigger
+                            value="preview"
+                            id={previewTabID}
+                            aria-controls={activeTab() === "preview" ? previewTabPanelID : undefined}
+                          >
+                            {language.t("session.tab.preview")}
+                          </Tabs.Trigger>
                         </Show>
                         <Show when={contextOpen()}>
                           <Tabs.Trigger
@@ -354,6 +368,21 @@ export function SessionSidePanel(props: {
                         classList={{ hidden: activeTab() !== "review" }}
                       >
                         {props.reviewPanel()}
+                      </div>
+                    </Show>
+
+                    <Show when={reviewTab() && props.canReview() && previewContentRendered()}>
+                      <div
+                        id={previewTabPanelID}
+                        role="tabpanel"
+                        aria-labelledby={previewTabID}
+                        aria-hidden={activeTab() !== "preview"}
+                        inert={activeTab() !== "preview"}
+                        data-slot="tabs-content"
+                        class="flex flex-col h-full overflow-hidden contain-strict"
+                        classList={{ hidden: activeTab() !== "preview" }}
+                      >
+                        <SessionPreviewTab />
                       </div>
                     </Show>
 
