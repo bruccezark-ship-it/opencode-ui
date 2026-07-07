@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "openweb-ui",
+  "description": "Standalone OpenCode Web UI — connects to opencode serve",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.14",
+  "scripts": {
+    "dev": "bun --cwd packages/app dev",
+    "build": "bun --cwd packages/app build",
+    "serve": "bun --cwd packages/app serve",
+    "preview": "bun --cwd packages/app serve"
+  },
+  "workspaces": {
+    "packages": [
+      "packages/*",
+      "packages/sdk/js"
+    ],
+    "catalog": {
+      "@kobalte/core": "0.13.11",
+      "@pierre/diffs": "1.2.10",
+      "@playwright/test": "1.59.1",
+      "@sentry/solid": "10.36.0",
+      "@sentry/vite-plugin": "4.6.0",
+      "@shikijs/stream": "4.2.0",
+      "@solid-primitives/storage": "4.3.3",
+      "@solidjs/meta": "0.29.4",
+      "@solidjs/router": "0.15.4",
+      "@tailwindcss/vite": "4.1.11",
+      "@tanstack/solid-virtual": "3.13.28",
+      "@tsconfig/bun": "1.0.9",
+      "@tsconfig/node22": "22.0.2",
+      "@types/bun": "1.3.13",
+      "@types/cross-spawn": "6.0.6",
+      "@types/luxon": "3.7.1",
+      "@types/node": "24.12.2",
+      "@typescript/native-preview": "7.0.0-dev.20251207.1",
+      "cross-spawn": "7.0.6",
+      "diff": "8.0.2",
+      "effect": "4.0.0-beta.83",
+      "fuzzysort": "3.1.0",
+      "luxon": "3.6.1",
+      "marked": "17.0.1",
+      "marked-shiki": "1.2.1",
+      "remeda": "2.26.0",
+      "remend": "1.3.0",
+      "shiki": "4.2.0",
+      "solid-js": "1.9.10",
+      "solid-list": "0.3.0",
+      "tailwindcss": "4.1.11",
+      "typescript": "5.8.2",
+      "vite": "7.1.4",
+      "vite-plugin-solid": "2.11.10"
+    }
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:"
+  },
+  "patchedDependencies": {
+    "solid-js@1.9.10": "patches/solid-js@1.9.10.patch",
+    "effect@4.0.0-beta.83": "patches/effect@4.0.0-beta.83.patch",
+    "@tanstack/solid-virtual@3.13.28": "patches/@tanstack%2Fsolid-virtual@3.13.28.patch",
+    "@tanstack/virtual-core@3.17.0": "patches/@tanstack%2Fvirtual-core@3.17.0.patch",
+    "@pierre/trees@1.0.0-beta.4": "patches/@pierre%2Ftrees@1.0.0-beta.4.patch"
+  }
+}
