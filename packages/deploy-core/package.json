@@ -22,6 +22,7 @@
     "fast-glob": "^3.3.3",
     "mime-types": "^2.1.35",
     "playwright-core": "^1.51.0",
+    "ssh2-sftp-client": "^11.0.0",
     "tencentcloud-sdk-nodejs": "^4.0.938",
     "zod": "^3.24.2"
   },

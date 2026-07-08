@@ -3,11 +3,13 @@ import { existsSync } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { join } from 'node:path';
+import { resolveDependencyRoot } from '../detector/build-command.js';
 
 export interface BuildOptions {
   cwd: string;
   command: string;
   outDir: string;
+  workspaceRoot?: string;
   env?: Record<string, string>;
   verbose?: boolean;
 }
@@ -26,12 +28,24 @@ export class BuildError extends Error {
   }
 }
 
-function createBuildEnv(cwd: string, extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
-  const localBin = join(cwd, 'node_modules', '.bin');
+function createBuildEnv(
+  cwd: string,
+  workspaceRoot: string | undefined,
+  extraEnv?: Record<string, string>,
+): NodeJS.ProcessEnv {
+  const dependencyRoot = resolveDependencyRoot(cwd, workspaceRoot);
+  const binPaths = [join(cwd, 'node_modules', '.bin')];
+  if (workspaceRoot && workspaceRoot !== cwd) {
+    binPaths.push(join(workspaceRoot, 'node_modules', '.bin'));
+  }
+  if (dependencyRoot !== cwd && dependencyRoot !== workspaceRoot) {
+    binPaths.push(join(dependencyRoot, 'node_modules', '.bin'));
+  }
+
   const basePath = process.env.PATH ?? process.env.Path ?? '';
-  const mergedPath = existsSync(localBin)
-    ? `${localBin}${path.delimiter}${basePath}`
-    : basePath;
+  const mergedPath = binPaths
+    .filter((binPath) => existsSync(binPath))
+    .reduce((current, binPath) => `${binPath}${path.delimiter}${current}`, basePath);
 
   return {
     ...process.env,
@@ -42,8 +56,9 @@ function createBuildEnv(cwd: string, extraEnv?: Record<string, string>): NodeJS.
   };
 }
 
-function ensureProjectReady(cwd: string): void {
-  if (!existsSync(join(cwd, 'node_modules'))) {
+function ensureProjectReady(cwd: string, workspaceRoot?: string): void {
+  const dependencyRoot = resolveDependencyRoot(cwd, workspaceRoot);
+  if (!existsSync(join(dependencyRoot, 'node_modules'))) {
     throw new BuildError('未找到 node_modules，请先在项目目录执行 npm install 或 pnpm install');
   }
 }
@@ -72,14 +87,14 @@ async function countFiles(dir: string): Promise<{ count: number; bytes: number }
 
 export async function build(options: BuildOptions): Promise<BuildResult> {
   const start = Date.now();
-  ensureProjectReady(options.cwd);
+  ensureProjectReady(options.cwd, options.workspaceRoot);
 
   const [cmd, ...args] = options.command.split(/\s+/);
 
   try {
     await execa(cmd, args, {
       cwd: options.cwd,
-      env: createBuildEnv(options.cwd, options.env),
+      env: createBuildEnv(options.cwd, options.workspaceRoot, options.env),
       stdio: options.verbose ? 'inherit' : 'pipe',
     });
   } catch (error) {

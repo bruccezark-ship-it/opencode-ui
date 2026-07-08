@@ -42,7 +42,7 @@ export const globalConfigSchema = z.object({
 export const projectConfigSchema = z.object({
   subdomain: z.string().optional(),
   routeFile: z.string().optional(),
-  buildCommand: z.string().default('vite build'),
+  buildCommand: z.string().optional(),
   outputDir: z.string().optional(),
   basePath: z.string().default('/'),
   cleanRemote: z.boolean().default(true),

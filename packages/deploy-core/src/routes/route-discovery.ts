@@ -6,7 +6,7 @@ import { parseRoutesFromPageFiles } from './pages-parser.js';
 import { parseRoutePaths } from './parser.js';
 import { crawlSpaRoutes } from '../seo/route-crawler.js';
 import { startSpaStaticServer } from '../seo/static-server.js';
-import type { DeployConfig, ResolvedRouteSource } from '../config/schema.js';
+import type { ProjectConfig, ResolvedRouteSource } from '../config/schema.js';
 
 export type RouteDiscoveryMethod = 'routerFile' | 'pagesDir' | 'crawl';
 
@@ -22,7 +22,7 @@ export interface RouteDiscoveryOption {
 export interface CollectRouteDiscoveryOptions {
   projectRoot: string;
   outDir: string;
-  config: DeployConfig;
+  projectConfig: ProjectConfig;
   onStatus?: (message: string) => void;
 }
 
@@ -91,7 +91,7 @@ export function pickDefaultRouteDiscoveryOption(
 export async function collectRouteDiscoveryResults(
   options: CollectRouteDiscoveryOptions,
 ): Promise<RouteDiscoveryOption[]> {
-  const { projectRoot, outDir, config, onStatus } = options;
+  const { projectRoot, outDir, projectConfig, onStatus } = options;
   const results: RouteDiscoveryOption[] = [];
   const candidates = await discoverRouteSources(projectRoot);
 
@@ -127,8 +127,8 @@ export async function collectRouteDiscoveryResults(
     const { routes, htmlByRoute } = await crawlSpaRoutes({
       serverUrl: server.url,
       basePath: viteBase,
-      maxPages: config.project.crawlMaxPages,
-      maxDepth: config.project.crawlMaxDepth,
+      maxPages: projectConfig.crawlMaxPages,
+      maxDepth: projectConfig.crawlMaxDepth,
       onStatus,
     });
 

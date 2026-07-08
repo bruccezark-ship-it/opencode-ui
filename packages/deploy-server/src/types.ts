@@ -36,11 +36,33 @@ export type SseEvent =
     }
   | {
       type: "complete"
-      result: {
-        url: string
-        urls: string[]
-        cosPath: string
-        cdnEntries: Array<{ domain: string; cname: string; created: boolean }>
-      }
+      result:
+        | {
+            url: string
+            urls: string[]
+            cosPath: string
+            cdnEntries: Array<{ domain: string; cname: string; created: boolean }>
+          }
+        | {
+            domain: string
+            cdnStatus: "removed" | "not_found"
+            dnsStatus: "deleted" | "not_found" | "skipped"
+            dnsSkipReason?: string
+            cosPrefix: string
+            cosDeleted: number
+            cosSkipped: boolean
+            cosSkipReason?: string
+          }
+        | {
+            host: string
+            remotePath: string
+            uploaded: number
+            skipped?: number
+            deleted?: number
+            totalBytes: number
+            url: string
+            domain: string
+            protocol: "http" | "https"
+          }
     }
   | { type: "error"; message: string; record?: SseEvent extends { type: "cdn-verification" } ? never : unknown }

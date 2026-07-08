@@ -7,6 +7,10 @@ import { normalizeDomain, resolveCosPrefixFromDomain } from '../validate/domain.
 export interface UndeployContext {
   domain: string;
   config: GlobalConfig;
+  /** 来自域名表的 COS 前缀，如 sites/my-app/ */
+  cosPrefix?: string;
+  /** 域名表中共享同一 cosPath 的其他域名；非空则保留 COS 资源 */
+  registrySiblingDomains?: string[];
 }
 
 export interface UndeployResult {
@@ -27,11 +31,29 @@ export interface UndeployOptions {
 
 const TOTAL_STEPS = 3;
 
+function shouldDeleteCosFromRegistry(
+  registrySiblingDomains: string[],
+): { delete: boolean; reason?: string } {
+  if (registrySiblingDomains.length > 0) {
+    return {
+      delete: false,
+      reason: `仍有域名 ${registrySiblingDomains.join(', ')} 指向同一 COS 目录，已保留 COS 资源`,
+    };
+  }
+
+  return { delete: true };
+}
+
 async function shouldDeleteCosResources(
   config: GlobalConfig,
   targetDomain: string,
   sharedDomains: string[],
+  registrySiblingDomains?: string[],
 ): Promise<{ delete: boolean; reason?: string }> {
+  if (registrySiblingDomains !== undefined) {
+    return shouldDeleteCosFromRegistry(registrySiblingDomains);
+  }
+
   const others = sharedDomains.filter((d) => normalizeDomain(d) !== normalizeDomain(targetDomain));
 
   for (const domain of others) {
@@ -51,11 +73,13 @@ export async function undeploy(
   options: UndeployOptions = {},
 ): Promise<UndeployResult> {
   const { domain, config } = ctx;
-  const { cosPrefix, sharedDomains } = resolveCosPrefixFromDomain(
+  const resolved = resolveCosPrefixFromDomain(
     domain,
     config.domain.baseDomain,
     config.cos.prefix,
   );
+  const cosPrefix = ctx.cosPrefix ?? resolved.cosPrefix;
+  const sharedDomains = resolved.sharedDomains;
   const dnsTarget = await resolveDnsTargetForDomain(domain, config);
 
   options.onStepStart?.(1, TOTAL_STEPS, '下线 CDN 域名');
@@ -100,7 +124,12 @@ export async function undeploy(
   }
 
   options.onStepStart?.(3, TOTAL_STEPS, '清除 COS 资源');
-  const cosDecision = await shouldDeleteCosResources(config, domain, sharedDomains);
+  const cosDecision = await shouldDeleteCosResources(
+    config,
+    domain,
+    sharedDomains,
+    ctx.registrySiblingDomains,
+  );
 
   if (!cosDecision.delete) {
     options.onStepComplete?.(

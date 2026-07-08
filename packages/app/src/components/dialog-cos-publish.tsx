@@ -3,7 +3,7 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { TextField } from "@opencode-ai/ui/text-field"
 import { Icon } from "@opencode-ai/ui/icon"
-import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
@@ -112,7 +112,33 @@ export function DialogCosPublish(props: DialogCosPublishProps) {
       : language.t("session.preview.publishCos.domain"),
   )
 
-  async function refreshPreview() {
+  const blockedDomains = createMemo(() => preview()?.blockedDomains ?? [])
+
+  createEffect(() => {
+    const target = store.target
+    const mode = store.mode
+    const protocol = store.protocol
+    const cdnHttps = store.cdnHttps
+    const certId = store.certId
+
+    if (!target.trim()) {
+      setPreview(undefined)
+      return
+    }
+
+    void mode
+    void protocol
+    void cdnHttps
+    void certId
+
+    const timer = window.setTimeout(() => {
+      void refreshPreview({ silent: true })
+    }, 500)
+
+    onCleanup(() => window.clearTimeout(timer))
+  })
+
+  async function refreshPreview(options?: { silent?: boolean }) {
     if (!store.target.trim()) {
       setPreview(undefined)
       return
@@ -128,12 +154,14 @@ export function DialogCosPublish(props: DialogCosPublishProps) {
       })
       setPreview(next)
     } catch (error) {
-      showToast({
-        variant: "error",
-        title: language.t("session.preview.publishCos.previewFailed"),
-        description: error instanceof Error ? error.message : undefined,
-      })
       setPreview(undefined)
+      if (!options?.silent) {
+        showToast({
+          variant: "error",
+          title: language.t("session.preview.publishCos.previewFailed"),
+          description: error instanceof Error ? error.message : undefined,
+        })
+      }
     }
   }
 
@@ -297,6 +325,14 @@ export function DialogCosPublish(props: DialogCosPublishProps) {
                 </Button>
               </div>
             </div>
+
+            <Show when={blockedDomains().length > 0}>
+              <div class="rounded-lg border border-border-warning-base bg-surface-warning-base/20 px-3 py-2 text-12-regular text-text-warning">
+                {language.t("session.preview.publishCos.domainTaken", {
+                  domains: blockedDomains().join("、"),
+                })}
+              </div>
+            </Show>
 
             <TextField
               autofocus
@@ -462,7 +498,7 @@ export function DialogCosPublish(props: DialogCosPublishProps) {
               type="button"
               variant="primary"
               size="large"
-              disabled={loading() || !!statusError() || !store.target.trim()}
+              disabled={loading() || !!statusError() || !store.target.trim() || blockedDomains().length > 0}
               onClick={() => void startDeploy()}
             >
               {language.t("session.preview.publishCos.confirm")}

@@ -4,13 +4,15 @@ import { initDeployBrowserEnv } from "./browser-env.js"
 initDeployBrowserEnv()
 
 import { join } from "node:path"
-import { emitEvent } from "./protocol.js"
+import { emitEvent, drainDeployOutput } from "./protocol.js"
 import { createStdinBridge } from "./stdin-bridge.js"
 import {
   getDeployStatus,
   previewDeploy,
   runDeploy,
 } from "./deploy-service.js"
+import { listPublishedDomains, runUndeploy } from "./undeploy-service.js"
+import { getServerDeployConfig, runServerDeploy } from "./server-deploy-service.js"
 import { runConfigCommand } from "./config-command.js"
 import type { DeployPreviewRequest, DeployStartRequest } from "./types.js"
 
@@ -20,6 +22,10 @@ function usage() {
   opencode-deploy status --project-root <path>
   opencode-deploy preview --project-root <path> --mode <subdomain|domain> --target <value> [options]
   opencode-deploy deploy --project-root <path> --mode <subdomain|domain> --target <value> [options]
+  opencode-deploy domains --project-root <path>
+  opencode-deploy undeploy --project-root <path> --domain <domain>
+  opencode-deploy server-config --project-root <path>
+  opencode-deploy server-deploy --project-root <path> --host <ip> --username <user> --path <remote-path> --domain <domain> [--protocol <http|https>]
 
 Options:
   --protocol <http|https>
@@ -86,13 +92,13 @@ async function main() {
     const projectRoot = String(flags["project-root"] ?? "")
     if (!projectRoot) usage()
     const data = await getDeployStatus(projectRoot)
-    emitEvent({ type: "result", data })
+    await emitEvent({ type: "result", data })
     return
   }
 
   if (command === "preview") {
     const data = await previewDeploy(readRequest(flags))
-    emitEvent({ type: "result", data })
+    await emitEvent({ type: "result", data })
     return
   }
 
@@ -108,17 +114,61 @@ async function main() {
         const input = await stdin.next()
         return input.action
       })
+      await drainDeployOutput()
     } finally {
       stdin.close()
     }
     return
   }
 
+  if (command === "domains") {
+    const projectRoot = String(flags["project-root"] ?? "")
+    if (!projectRoot) usage()
+    const data = await listPublishedDomains(projectRoot)
+    await emitEvent({ type: "result", data })
+    return
+  }
+
+  if (command === "undeploy") {
+    const projectRoot = String(flags["project-root"] ?? "")
+    const domain = String(flags.domain ?? "")
+    if (!projectRoot || !domain) usage()
+    await runUndeploy({ projectRoot, domain }, emitEvent)
+    await drainDeployOutput()
+    return
+  }
+
+  if (command === "server-config") {
+    const projectRoot = String(flags["project-root"] ?? "")
+    if (!projectRoot) usage()
+    const data = await getServerDeployConfig(projectRoot)
+    await emitEvent({ type: "result", data })
+    return
+  }
+
+  if (command === "server-deploy") {
+    const projectRoot = String(flags["project-root"] ?? "")
+    const host = String(flags.host ?? "")
+    const username = String(flags.username ?? "root")
+    const path = String(flags.path ?? "/var/www/html/")
+    const domain = String(flags.domain ?? "")
+    const protocol = String(flags.protocol ?? "http") === "https" ? "https" : "http"
+    if (!projectRoot || !host || !domain) usage()
+    await runServerDeploy({ projectRoot, host, username, path, domain, protocol }, emitEvent)
+    await drainDeployOutput()
+    return
+  }
+
   usage()
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error)
-  emitEvent({ type: "error", message })
-  process.exit(1)
-})
+main()
+  .then(() => {
+    process.exitCode = 0
+  })
+  .catch(async (error) => {
+    const message = error instanceof Error ? error.message : String(error)
+    await emitEvent({ type: "error", message }).catch(() => undefined)
+    await drainDeployOutput().catch(() => undefined)
+    process.exit(1)
+  })

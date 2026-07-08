@@ -13,12 +13,15 @@ import {
   normalizeSubdomain,
   pickDefaultRouteDiscoveryOption,
   ProjectError,
+  recordPublishedDomains,
   resolveDeployPlan,
   resolveOutDir,
   resolveSiteBaseDomain,
   resolveSubdomainPlan,
   validateDomain,
   validateSubdomain,
+  validateDomainsForPublish,
+  getBlockedPublishDomains,
   type DeployPlan,
 } from "@opencode-ai/deploy-core"
 import type { DeployPreviewRequest, DeployStartRequest, SseEvent } from "./types.js"
@@ -89,12 +92,26 @@ export async function getDeployStatus(projectRoot: string) {
   }
 }
 
+async function assertPublishDomainsAvailable(
+  request: DeployPreviewRequest,
+  domains: string[],
+  config: Awaited<ReturnType<typeof loadDeployConfig>>,
+) {
+  const settings = applyDeploySettings(config, request)
+  const validation = await validateDomainsForPublish(request.projectRoot, domains, settings)
+  if (validation !== true) {
+    throw new Error(validation)
+  }
+}
+
 export async function previewDeploy(request: DeployPreviewRequest) {
   const config = await loadDeployConfig(request.projectRoot)
   const plan = await buildPlan(request)
   const enriched = await enrichDeployPlanDns(plan, config)
   const settings = applyDeploySettings(config, request)
   const protocol = settings.domain.protocol
+  const planDomains = enriched.domains.map((entry) => entry.fullDomain)
+  const blockedDomains = await getBlockedPublishDomains(request.projectRoot, planDomains, settings)
 
   let skipCdnAndDns = false
   try {
@@ -130,6 +147,7 @@ export async function previewDeploy(request: DeployPreviewRequest) {
     cosPrefix: enriched.cosPrefix,
     skipCdnAndDns,
     expandedDomains: expanded && expanded.length > 1 ? expanded : undefined,
+    blockedDomains: blockedDomains.length > 0 ? blockedDomains : undefined,
     dnsStatus,
     settings: {
       protocol,
@@ -147,6 +165,12 @@ export async function runDeploy(
   let config = await loadDeployConfig(request.projectRoot)
   const plan = await enrichDeployPlanDns(await buildPlan(request), config)
   config = applyDeploySettings(config, request)
+
+  await assertPublishDomainsAvailable(
+    request,
+    plan.domains.map((entry) => entry.fullDomain),
+    config,
+  )
 
   if (config.cdn.https && !config.cdn.certId) {
     throw new Error("已开启 CDN HTTPS，但未配置证书 ID")
@@ -278,6 +302,15 @@ export async function runDeploy(
       },
     },
   )
+
+  await recordPublishedDomains(request.projectRoot, {
+    mode: request.mode,
+    target: request.target.trim(),
+    urls: result.urls,
+    cosPath: result.cosPath,
+    cdnEntries: result.cdnEntries,
+  })
+  emit({ type: "status", message: "已更新项目域名记录 (.opencode-deploy-domains.json)" })
 
   emit({
     type: "complete",

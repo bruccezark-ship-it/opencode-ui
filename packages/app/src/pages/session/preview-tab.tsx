@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, createSignal, onCleanup, Show, untrack } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, onCleanup, Show, untrack } from "solid-js"
 
 import { createStore } from "solid-js/store"
 
@@ -535,6 +535,51 @@ export function SessionPreviewTab() {
     })
   }
 
+  const openServerPublish = () => {
+    const root = worktree()
+    void import("@/components/dialog-server-publish").then((module) => {
+      dialog.show(() => <module.DialogServerPublish projectRoot={root} />)
+    })
+  }
+
+  const [publishedDomains, setPublishedDomains] = createSignal<
+    Array<{ domain: string; url: string; cosPath: string; publishedAt: string }>
+  >([])
+  const [domainsLoading, setDomainsLoading] = createSignal(false)
+
+  const deployCtx = createMemo(() => ({
+    client: sdk().client,
+    serverUrl: sdk().url,
+    directory: sdk().directory,
+    projectRoot: worktree(),
+  }))
+
+  async function loadPublishedDomains() {
+    setDomainsLoading(true)
+    try {
+      const { fetchDomainRegistry } = await import("@/pages/session/cos-deploy")
+      const data = await fetchDomainRegistry(deployCtx())
+      setPublishedDomains(data.domains)
+    } catch {
+      setPublishedDomains([])
+    } finally {
+      setDomainsLoading(false)
+    }
+  }
+
+  const openCosUndeploy = (domain: string) => {
+    const root = worktree()
+    void import("@/components/dialog-cos-undeploy").then((module) => {
+      dialog.show(() => (
+        <module.DialogCosUndeploy
+          projectRoot={root}
+          domain={domain}
+          onComplete={() => void loadPublishedDomains()}
+        />
+      ))
+    })
+  }
+
 
 
   const statusKey = createMemo(() => previewPhaseMessageKey(phase()))
@@ -702,9 +747,52 @@ export function SessionPreviewTab() {
               <DropdownMenu.Item onSelect={openCosPublish}>
                 <DropdownMenu.ItemLabel>{language.t("session.preview.publishCos")}</DropdownMenu.ItemLabel>
               </DropdownMenu.Item>
-              <DropdownMenu.Item onSelect={() => {}}>
+              <DropdownMenu.Item onSelect={openServerPublish}>
                 <DropdownMenu.ItemLabel>{language.t("session.preview.publishServer")}</DropdownMenu.ItemLabel>
               </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu>
+
+        <DropdownMenu gutter={4} placement="bottom-end" onOpenChange={(open) => open && void loadPublishedDomains()}>
+          <DropdownMenu.Trigger
+            as={ButtonV2}
+            size="small"
+            variant="outline"
+            class="shrink-0 gap-1 px-2 data-[expanded]:bg-surface-base-active"
+            aria-label={language.t("session.preview.undeploy")}
+          >
+            {language.t("session.preview.undeploy")}
+            <Icon name="chevron-down" size="small" class="text-icon-weak" />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content class="min-w-[220px] max-h-[280px] overflow-y-auto">
+              <Show
+                when={!domainsLoading()}
+                fallback={
+                  <div class="px-3 py-2 text-12-regular text-text-weak">
+                    {language.t("session.preview.undeployCos.loading")}
+                  </div>
+                }
+              >
+                <Show
+                  when={publishedDomains().length > 0}
+                  fallback={
+                    <div class="px-3 py-2 text-12-regular text-text-weak">
+                      {language.t("session.preview.undeployCos.empty")}
+                    </div>
+                  }
+                >
+                  <For each={publishedDomains()}>
+                    {(entry) => (
+                      <DropdownMenu.Item onSelect={() => openCosUndeploy(entry.domain)}>
+                        <DropdownMenu.ItemLabel>{entry.domain}</DropdownMenu.ItemLabel>
+                        <DropdownMenu.ItemDescription>{entry.url}</DropdownMenu.ItemDescription>
+                      </DropdownMenu.Item>
+                    )}
+                  </For>
+                </Show>
+              </Show>
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu>

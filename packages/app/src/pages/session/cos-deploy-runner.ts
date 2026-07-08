@@ -1,5 +1,6 @@
 import type { DirectorySDK } from "@/context/sdk"
-import type { DeploySseEvent } from "@/pages/session/cos-deploy"
+import type { DeploySseEvent, UndeploySseEvent } from "@/pages/session/cos-deploy"
+import type { ServerDeploySseEvent } from "@/pages/session/server-deploy"
 import { previewLaunchPlatform } from "@/pages/session/preview-project"
 import { formatServerError } from "@/utils/server-errors"
 import { terminalWebSocketURL } from "@/utils/terminal-websocket-url"
@@ -8,10 +9,18 @@ const DEPLOY_EVENT_MARKER = "@@DEPLOY@@"
 const DEPLOY_INPUT_MARKER = "@@DEPLOY_INPUT@@"
 const DEPLOY_PTY_TITLE = "__opencode_cos_deploy__"
 const DEPLOY_INPUT_FILE = ".opencode-deploy-input"
+const SERVER_DEPLOY_CREDS_FILE = ".opencode-server-deploy-creds.json"
 const POLL_INTERVAL_MS = 500
 
 type DeployCliCommand = {
-  subcommand: "status" | "preview" | "deploy"
+  subcommand:
+    | "status"
+    | "preview"
+    | "deploy"
+    | "domains"
+    | "undeploy"
+    | "server-config"
+    | "server-deploy"
   args: string[]
 }
 
@@ -21,10 +30,23 @@ type RunDeployCliInput = {
   directory: string
   projectRoot: string
   command: DeployCliCommand
-  onEvent?: (event: DeploySseEvent) => void
+  extraEnv?: Record<string, string>
+  onEvent?: (
+    event:
+      | DeploySseEvent
+      | UndeploySseEvent
+      | ServerDeploySseEvent
+      | { type: "result"; data: unknown }
+  ) => void
   onReady?: (send: (action: "verify" | "refresh" | "cancel") => Promise<boolean>) => void
   signal?: AbortSignal
 }
+
+const STREAMING_DEPLOY_COMMANDS = new Set<DeployCliCommand["subcommand"]>([
+  "deploy",
+  "undeploy",
+  "server-deploy",
+])
 
 type RunDeployCliResult = {
   data?: unknown
@@ -136,16 +158,61 @@ function stripTerminalControl(value: string) {
     .replace(/\u001b[@-_]/g, "")
 }
 
-function parseEventPayload(payload: string) {
+type DeployStreamEvent =
+  | DeploySseEvent
+  | UndeploySseEvent
+  | ServerDeploySseEvent
+  | { type: "result"; data: unknown }
+
+function parseEventPayload(payload: string): DeployStreamEvent | undefined {
   const candidates = [payload.trim(), payload.replace(/[\r\n]+/g, "")]
   for (const candidate of candidates) {
     if (!candidate) continue
     try {
-      return JSON.parse(candidate) as DeploySseEvent | { type: "result"; data: unknown }
+      return JSON.parse(candidate) as DeployStreamEvent
     } catch {
       continue
     }
   }
+}
+
+function extractBalancedJson(text: string, start: number, end: number): string | undefined {
+  let depth = 0
+  let inString = false
+  let escaped = false
+
+  for (let i = start; i < end; i++) {
+    const char = text[i]
+    if (inString) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (char === "\\") {
+        escaped = true
+        continue
+      }
+      if (char === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (char === '"') {
+      inString = true
+      continue
+    }
+    if (char === "{") {
+      depth++
+    } else if (char === "}") {
+      depth--
+      if (depth === 0) {
+        return text.slice(start, i + 1)
+      }
+    }
+  }
+
+  return undefined
 }
 
 function extractEventAfterMarker(cleaned: string, markerAt: number) {
@@ -154,17 +221,17 @@ function extractEventAfterMarker(cleaned: string, markerAt: number) {
 
   const nextMarker = cleaned.indexOf(DEPLOY_EVENT_MARKER, markerAt + DEPLOY_EVENT_MARKER.length)
   const searchEnd = nextMarker === -1 ? cleaned.length : nextMarker
-  const jsonEnd = cleaned.lastIndexOf("}", searchEnd - 1)
-  if (jsonEnd <= jsonStart) return
+  const jsonText = extractBalancedJson(cleaned, jsonStart, searchEnd)
+  if (!jsonText) return
 
-  const parsed = parseEventPayload(cleaned.slice(jsonStart, jsonEnd + 1))
+  const parsed = parseEventPayload(jsonText)
   if (!parsed) return
 
-  return { event: parsed, end: jsonEnd + 1 }
+  return { event: parsed, end: jsonStart + jsonText.length }
 }
 
 export function consumeDeployBuffer(buffer: string) {
-  const events: Array<DeploySseEvent | { type: "result"; data: unknown }> = []
+  const events: DeployStreamEvent[] = []
   const cleaned = stripTerminalControl(buffer)
   let cursor = 0
 
@@ -174,7 +241,12 @@ export function consumeDeployBuffer(buffer: string) {
 
     const extracted = extractEventAfterMarker(cleaned, markerAt)
     if (!extracted) {
-      return { events, rest: cleaned.slice(markerAt) }
+      const nextMarker = cleaned.indexOf(DEPLOY_EVENT_MARKER, markerAt + DEPLOY_EVENT_MARKER.length)
+      if (nextMarker === -1) {
+        return { events, rest: cleaned.slice(markerAt) }
+      }
+      cursor = nextMarker
+      continue
     }
 
     events.push(extracted.event)
@@ -184,10 +256,84 @@ export function consumeDeployBuffer(buffer: string) {
   return { events, rest: "" }
 }
 
-function applyDeployEvents(
-  events: Array<DeploySseEvent | { type: "result"; data: unknown }>,
+function collectDeployEventsFromRawOutput(rawOutput: string) {
+  const events: DeployStreamEvent[] = []
+  const cleaned = stripTerminalControl(rawOutput)
+  let cursor = 0
+
+  while (cursor < cleaned.length) {
+    const markerAt = cleaned.indexOf(DEPLOY_EVENT_MARKER, cursor)
+    if (markerAt === -1) break
+
+    const extracted = extractEventAfterMarker(cleaned, markerAt)
+    if (!extracted) {
+      cursor = markerAt + DEPLOY_EVENT_MARKER.length
+      continue
+    }
+
+    events.push(extracted.event)
+    cursor = Math.max(extracted.end, markerAt + DEPLOY_EVENT_MARKER.length)
+  }
+
+  return events
+}
+
+function recoverServerDeployCompleteFromRawOutput(rawOutput: string): ServerDeploySseEvent | undefined {
+  const normalized = stripTerminalControl(rawOutput).replace(/[\r\n]+/g, "")
+  const marker = '"type":"complete"'
+  const markerAt = normalized.lastIndexOf(marker)
+  if (markerAt === -1) return undefined
+
+  const jsonStart = normalized.lastIndexOf("{", markerAt)
+  if (jsonStart === -1) return undefined
+
+  const jsonText = extractBalancedJson(normalized, jsonStart, normalized.length)
+  if (!jsonText) return undefined
+
+  const parsed = parseEventPayload(jsonText)
+  if (parsed?.type !== "complete" || !("result" in parsed)) return undefined
+  if (!parsed.result || typeof parsed.result !== "object" || !("host" in parsed.result)) return undefined
+  return parsed as ServerDeploySseEvent
+}
+
+function recoverMissingDeployEvents(
+  rawOutput: string,
   input: RunDeployCliInput,
   result: RunDeployCliResult,
+  state: { sawComplete: boolean; lastError?: Error; uploadStepDone?: boolean },
+) {
+  if (state.sawComplete) return
+
+  const recovered = collectDeployEventsFromRawOutput(rawOutput)
+  const missing = recovered.filter((event) => {
+    if (event.type === "complete") return true
+    if (
+      event.type === "step-complete" &&
+      input.command.subcommand === "server-deploy" &&
+      event.name === "上传到服务器" &&
+      (event.message.includes("同步完成") || event.message.includes("上传完成"))
+    ) {
+      return true
+    }
+    return false
+  })
+
+  if (missing.length > 0) {
+    applyDeployEvents(missing, input, result, state)
+    return
+  }
+
+  const complete = recoverServerDeployCompleteFromRawOutput(rawOutput)
+  if (complete) {
+    applyDeployEvents([complete], input, result, state)
+  }
+}
+
+function applyDeployEvents(
+  events: DeployStreamEvent[],
+  input: RunDeployCliInput,
+  result: RunDeployCliResult,
+  state: { sawComplete: boolean; lastError?: Error; uploadStepDone?: boolean },
   reject?: (error: Error) => void,
 ) {
   for (const payload of events) {
@@ -196,14 +342,80 @@ function applyDeployEvents(
       continue
     }
 
+    if (payload.type === "complete") {
+      state.sawComplete = true
+    }
+
+    if (
+      payload.type === "step-complete" &&
+      input.command.subcommand === "server-deploy" &&
+      payload.name === "上传到服务器" &&
+      (payload.message.includes("同步完成") || payload.message.includes("上传完成"))
+    ) {
+      state.uploadStepDone = true
+    }
+
     input.onEvent?.(payload)
     if (payload.type === "error") {
-      reject?.(new Error(payload.message))
+      state.lastError = new Error(payload.message)
+      reject?.(state.lastError)
       return false
     }
   }
 
   return true
+}
+
+function assertStreamingDeployFinished(
+  command: DeployCliCommand["subcommand"],
+  state: { sawComplete: boolean; lastError?: Error; uploadStepDone?: boolean },
+  result: RunDeployCliResult,
+  rawOutput: string,
+  input: RunDeployCliInput,
+) {
+  if (!STREAMING_DEPLOY_COMMANDS.has(command)) return
+
+  if (state.lastError) {
+    throw state.lastError
+  }
+
+  if (
+    !state.uploadStepDone &&
+    command === "server-deploy" &&
+    /上传到服务器/.test(rawOutput) &&
+    /(同步完成|上传完成) \(\d+ 新文件/.test(rawOutput)
+  ) {
+    state.uploadStepDone = true
+  }
+
+  if (!state.sawComplete && state.uploadStepDone && command === "server-deploy") {
+    const uploadedMatch = rawOutput.match(/(?:同步完成|上传完成) \((\d+) 新文件/)
+    const hostMatch = rawOutput.match(/"host":"([^"]+)"/)
+    const remotePathMatch = rawOutput.match(/"remotePath":"([^"]+)"/)
+    const urlMatch = rawOutput.match(/"url":"([^"]+)"/)
+    const domainMatch = rawOutput.match(/"domain":"([^"]+)"/)
+    const protocolMatch = rawOutput.match(/"protocol":"(http|https)"/)
+    input.onEvent?.({
+      type: "complete",
+      result: {
+        host: hostMatch?.[1] ?? "",
+        remotePath: remotePathMatch?.[1] ?? "",
+        uploaded: uploadedMatch ? Number(uploadedMatch[1]) : 0,
+        totalBytes: 0,
+        url: urlMatch?.[1] ?? "",
+        domain: domainMatch?.[1] ?? "",
+        protocol: protocolMatch?.[1] === "https" ? "https" : "http",
+      },
+    })
+    return
+  }
+
+  if (!state.sawComplete) {
+    const snippet = stripTerminalControl(rawOutput).trim().slice(-800)
+    throw new Error(
+      `发布未正常完成（exitCode: ${result.exitCode ?? "unknown"}）${snippet ? `：${snippet}` : ""}`,
+    )
+  }
 }
 
 async function waitForPtyExit(client: DirectorySDK["client"], ptyId: string, signal?: AbortSignal) {
@@ -262,6 +474,38 @@ async function appendDeployInputViaFile(
   return exit.exitCode === 0 || exit.exitCode === undefined
 }
 
+export async function writeServerDeployCredentials(
+  client: DirectorySDK["client"],
+  directory: string,
+  projectRoot: string,
+  password: string,
+) {
+  const payload = JSON.stringify({ password })
+  const cwd = normalizeDeployPath(projectRoot)
+  const script = [
+    "const fs=require('node:fs')",
+    "const path=require('node:path')",
+    `fs.writeFileSync(path.join(process.cwd(), ${JSON.stringify(SERVER_DEPLOY_CREDS_FILE)}), ${JSON.stringify(payload)}, { mode: 0o600 })`,
+  ].join(";")
+
+  const created = await client.pty
+    .create({
+      directory,
+      command: resolveDeployNodeRuntime(),
+      args: ["-e", script],
+      cwd,
+      title: "__opencode_server_deploy_creds__",
+    })
+    .catch(() => undefined)
+
+  const pty = created?.data
+  if (!pty) return false
+
+  const exit = await waitForPtyExit(client, pty.id)
+  await client.pty.remove({ ptyID: pty.id }).catch(() => {})
+  return exit.exitCode === 0 || exit.exitCode === undefined
+}
+
 export async function runDeployCli(input: RunDeployCliInput): Promise<RunDeployCliResult> {
   const launch = buildLaunch(input.command, input.projectRoot, input.serverUrl)
   const created = await input.client.pty
@@ -271,7 +515,10 @@ export async function runDeployCli(input: RunDeployCliInput): Promise<RunDeployC
       args: launch.args,
       cwd: "cwd" in launch ? launch.cwd : normalizeDeployPath(input.projectRoot),
       title: DEPLOY_PTY_TITLE,
-      env: deployBrowserEnv(),
+      env: {
+        ...deployBrowserEnv(),
+        ...input.extraEnv,
+      },
     })
     .catch((error) => {
       throw new Error(formatServerError(error, undefined, "无法创建发布进程"))
@@ -344,6 +591,8 @@ export async function runDeployCli(input: RunDeployCliInput): Promise<RunDeployC
 
     input.onReady?.(sendInput)
 
+    const streamState = { sawComplete: false, lastError: undefined as Error | undefined, uploadStepDone: false }
+
     const messagePromise = new Promise<void>((resolve, reject) => {
       if (!socket) return resolve()
 
@@ -355,11 +604,11 @@ export async function runDeployCli(input: RunDeployCliInput): Promise<RunDeployC
 
         const parsed = consumeDeployBuffer(buffer)
         buffer = final ? "" : parsed.rest
-        if (!applyDeployEvents(parsed.events, input, result, reject)) return
+        if (!applyDeployEvents(parsed.events, input, result, streamState, reject)) return
 
         if (final && buffer.trim()) {
           const trailing = consumeDeployBuffer(buffer)
-          applyDeployEvents(trailing.events, input, result, reject)
+          applyDeployEvents(trailing.events, input, result, streamState, reject)
         }
       }
 
@@ -382,11 +631,16 @@ export async function runDeployCli(input: RunDeployCliInput): Promise<RunDeployC
 
     if (buffer.trim()) {
       const trailing = consumeDeployBuffer(`${buffer}\n`)
-      applyDeployEvents(trailing.events, input, result)
+      applyDeployEvents(trailing.events, input, result, streamState)
     }
 
+    recoverMissingDeployEvents(rawOutput, input, result, streamState)
+
     if (
-      (input.command.subcommand === "status" || input.command.subcommand === "preview") &&
+      (input.command.subcommand === "status" ||
+        input.command.subcommand === "preview" ||
+        input.command.subcommand === "domains" ||
+        input.command.subcommand === "server-config") &&
       result.data === undefined
     ) {
       const snippet = stripTerminalControl(rawOutput).trim().slice(-400)
@@ -394,6 +648,8 @@ export async function runDeployCli(input: RunDeployCliInput): Promise<RunDeployC
         `发布 CLI 未返回结果（exitCode: ${result.exitCode ?? "unknown"}）${snippet ? `：${snippet}` : ""}`,
       )
     }
+
+    assertStreamingDeployFinished(input.command.subcommand, streamState, result, rawOutput, input)
 
     return result
   } finally {

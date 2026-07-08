@@ -31,6 +31,7 @@ export type DeployPreview = {
   cosPrefix: string
   skipCdnAndDns: boolean
   expandedDomains?: string[]
+  blockedDomains?: string[]
   dnsStatus: Array<{
     domain: string
     managedDns: boolean
@@ -64,6 +65,35 @@ export type DeploySseEvent =
         cdnEntries: Array<{ domain: string; cname: string; created: boolean }>
       }
     }
+  | { type: "error"; message: string }
+
+export type PublishedDomainSummary = {
+  domain: string
+  url: string
+  cosPath: string
+  publishedAt: string
+}
+
+export type DomainRegistryResult = {
+  domains: PublishedDomainSummary[]
+}
+
+export type UndeployResult = {
+  domain: string
+  cdnStatus: "removed" | "not_found"
+  dnsStatus: "deleted" | "not_found" | "skipped"
+  dnsSkipReason?: string
+  cosPrefix: string
+  cosDeleted: number
+  cosSkipped: boolean
+  cosSkipReason?: string
+}
+
+export type UndeploySseEvent =
+  | { type: "step-start"; step: number; total: number; name: string }
+  | { type: "step-complete"; step: number; total: number; name: string; message: string }
+  | { type: "status"; message: string }
+  | { type: "complete"; result: UndeployResult }
   | { type: "error"; message: string }
 
 export type DeployClient = {
@@ -170,4 +200,46 @@ export async function startCosDeploy(
     onReady: (send) => setActiveDeployVerificationSender(send),
     signal,
   }).finally(() => setActiveDeployVerificationSender(undefined))
+}
+
+export async function fetchDomainRegistry(ctx: DeployClient) {
+  const result = await runDeployCli({
+    client: ctx.client,
+    serverUrl: ctx.serverUrl,
+    directory: ctx.directory,
+    projectRoot: ctx.projectRoot,
+    command: {
+      subcommand: "domains",
+      args: ["--project-root", ctx.projectRoot.replace(/\\/g, "/")],
+    },
+  })
+  return assertDeployResult(result.data as DomainRegistryResult | undefined, "域名表")
+}
+
+export async function startCosUndeploy(
+  ctx: DeployClient,
+  input: {
+    projectRoot: string
+    domain: string
+  },
+  onEvent: (event: UndeploySseEvent) => void,
+  signal?: AbortSignal,
+) {
+  await runDeployCli({
+    client: ctx.client,
+    serverUrl: ctx.serverUrl,
+    directory: ctx.directory,
+    projectRoot: ctx.projectRoot,
+    command: {
+      subcommand: "undeploy",
+      args: [
+        "--project-root",
+        input.projectRoot.replace(/\\/g, "/"),
+        "--domain",
+        input.domain,
+      ],
+    },
+    onEvent,
+    signal,
+  })
 }
