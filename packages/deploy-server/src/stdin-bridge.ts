@@ -1,9 +1,11 @@
 import { existsSync, readFileSync, unlinkSync, watchFile } from "node:fs"
 import { DEPLOY_INPUT_MARKER } from "./protocol.js"
 
-export type DeployInputAction = {
-  action: "verify" | "refresh" | "cancel"
-}
+export type DeployInputAction =
+  | { action: "verify" | "refresh" | "cancel" }
+  | { action: "route-discovery-select"; sessionId: string; optionId: string }
+  | { action: "route-discovery-browser"; sessionId: string }
+  | { action: "route-discovery-cancel"; sessionId: string }
 
 function parseDeployInputLine(line: string): DeployInputAction | undefined {
   const trimmed = line.trim()

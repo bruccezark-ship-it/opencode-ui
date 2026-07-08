@@ -90,10 +90,10 @@ export interface DeployOptions {
   noClean?: boolean;
   /** 加速域名均已存在于 CDN 时，跳过 CDN 配置与 DNS 解析 */
   skipCdnAndDns?: boolean;
-  /** 非交互模式下自动选择路由表；交互模式下由 CLI 提供 */
+  /** 交互模式返回 option 或 'browser'；非交互模式自动选择 */
   onRouteDiscoverySelect?: (
     options: RouteDiscoveryOption[],
-  ) => Promise<RouteDiscoveryOption | undefined>;
+  ) => Promise<RouteDiscoveryOption | 'browser' | undefined>;
   onStepStart?: (step: number, total: number, name: string) => void;
   onStepComplete?: (step: number, total: number, name: string, message: string) => void;
   onCdnVerificationRequired?: CdnVerificationHandler;

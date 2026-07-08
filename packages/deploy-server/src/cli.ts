@@ -110,10 +110,7 @@ async function main() {
     const stdin = createStdinBridge({ inputFile })
 
     try {
-      await runDeploy(request, emitEvent, async () => {
-        const input = await stdin.next()
-        return input.action
-      })
+      await runDeploy(request, emitEvent, stdin.next)
       await drainDeployOutput()
     } finally {
       stdin.close()
@@ -154,8 +151,16 @@ async function main() {
     const domain = String(flags.domain ?? "")
     const protocol = String(flags.protocol ?? "http") === "https" ? "https" : "http"
     if (!projectRoot || !host || !domain) usage()
-    await runServerDeploy({ projectRoot, host, username, path, domain, protocol }, emitEvent)
-    await drainDeployOutput()
+
+    const inputFile = join(projectRoot, ".opencode-deploy-input")
+    const stdin = createStdinBridge({ inputFile })
+
+    try {
+      await runServerDeploy({ projectRoot, host, username, path, domain, protocol }, emitEvent, stdin.next)
+      await drainDeployOutput()
+    } finally {
+      stdin.close()
+    }
     return
   }
 

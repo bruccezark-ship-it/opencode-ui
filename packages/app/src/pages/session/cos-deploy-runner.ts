@@ -12,6 +12,12 @@ const DEPLOY_INPUT_FILE = ".opencode-deploy-input"
 const SERVER_DEPLOY_CREDS_FILE = ".opencode-server-deploy-creds.json"
 const POLL_INTERVAL_MS = 500
 
+export type DeployInputPayload =
+  | { action: "verify" | "refresh" | "cancel" }
+  | { action: "route-discovery-select"; sessionId: string; optionId: string }
+  | { action: "route-discovery-browser"; sessionId: string }
+  | { action: "route-discovery-cancel"; sessionId: string }
+
 type DeployCliCommand = {
   subcommand:
     | "status"
@@ -38,7 +44,7 @@ type RunDeployCliInput = {
       | ServerDeploySseEvent
       | { type: "result"; data: unknown }
   ) => void
-  onReady?: (send: (action: "verify" | "refresh" | "cancel") => Promise<boolean>) => void
+  onReady?: (send: (payload: DeployInputPayload) => Promise<boolean>) => void
   signal?: AbortSignal
 }
 
@@ -48,25 +54,25 @@ const STREAMING_DEPLOY_COMMANDS = new Set<DeployCliCommand["subcommand"]>([
   "server-deploy",
 ])
 
+const INTERACTIVE_DEPLOY_COMMANDS = new Set<DeployCliCommand["subcommand"]>(["deploy", "server-deploy"])
+
 type RunDeployCliResult = {
   data?: unknown
   exitCode?: number
 }
 
-let activeSendVerification:
-  | ((action: "verify" | "refresh" | "cancel") => Promise<boolean>)
-  | undefined
+let activeSendDeployInput: ((payload: DeployInputPayload) => Promise<boolean>) | undefined
 
-export function setActiveDeployVerificationSender(
-  sender: ((action: "verify" | "refresh" | "cancel") => Promise<boolean>) | undefined,
+export function setActiveDeployInputSender(
+  sender: ((payload: DeployInputPayload) => Promise<boolean>) | undefined,
 ) {
-  activeSendVerification = sender
+  activeSendDeployInput = sender
 }
 
-export async function sendDeployVerification(action: "verify" | "refresh" | "cancel") {
-  if (!activeSendVerification) throw new Error("当前没有进行中的发布验证会话")
-  const sent = await activeSendVerification(action)
-  if (!sent) throw new Error("发布进程连接已断开，无法发送验证指令")
+export async function sendDeployInput(payload: DeployInputPayload) {
+  if (!activeSendDeployInput) throw new Error("当前没有进行中的发布交互会话")
+  const sent = await activeSendDeployInput(payload)
+  if (!sent) throw new Error("发布进程连接已断开，无法发送指令")
 }
 
 function deployCliPath() {
@@ -446,9 +452,9 @@ async function appendDeployInputViaFile(
   client: DirectorySDK["client"],
   directory: string,
   projectRoot: string,
-  action: "verify" | "refresh" | "cancel",
+  payload: DeployInputPayload,
 ) {
-  const line = `${DEPLOY_INPUT_MARKER}${JSON.stringify({ action })}\n`
+  const line = `${DEPLOY_INPUT_MARKER}${JSON.stringify(payload)}\n`
   const cwd = normalizeDeployPath(projectRoot)
   const script = [
     "const fs=require('node:fs')",
@@ -569,19 +575,19 @@ export async function runDeployCli(input: RunDeployCliInput): Promise<RunDeployC
       socket.addEventListener("error", () => reject(new Error("发布进程连接失败")), { once: true })
     })
 
-    const sendInput = async (action: "verify" | "refresh" | "cancel") => {
+    const sendInput = async (payload: DeployInputPayload) => {
       let sent = false
       if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(`${DEPLOY_INPUT_MARKER}${JSON.stringify({ action })}\r\n`)
+        socket.send(`${DEPLOY_INPUT_MARKER}${JSON.stringify(payload)}\r\n`)
         sent = true
       }
 
-      if (input.command.subcommand === "deploy") {
+      if (INTERACTIVE_DEPLOY_COMMANDS.has(input.command.subcommand)) {
         const fileSent = await appendDeployInputViaFile(
           input.client,
           input.directory,
           input.projectRoot,
-          action,
+          payload,
         )
         return sent || fileSent
       }

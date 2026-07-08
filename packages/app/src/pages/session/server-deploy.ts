@@ -2,6 +2,7 @@ import type { DirectorySDK } from "@/context/sdk"
 import {
   buildDeployCliArgs,
   runDeployCli,
+  setActiveDeployInputSender,
   writeServerDeployCredentials,
 } from "@/pages/session/cos-deploy-runner"
 import { fileText } from "@/pages/session/preview-structure"
@@ -32,6 +33,11 @@ export type ServerDeploySseEvent =
   | { type: "step-start"; step: number; total: number; name: string }
   | { type: "step-complete"; step: number; total: number; name: string; message: string }
   | { type: "status"; message: string }
+  | {
+      type: "route-discovery"
+      sessionId: string
+      options: Array<{ id: string; label: string; routeCount: number; routePreview: string }>
+    }
   | { type: "complete"; result: ServerDeployResult }
   | { type: "error"; message: string }
 
@@ -159,6 +165,7 @@ export async function startServerDeploy(
       OPENCODE_SERVER_DEPLOY_PASSWORD: input.password,
     },
     onEvent,
+    onReady: (send) => setActiveDeployInputSender(send),
     signal,
-  })
+  }).finally(() => setActiveDeployInputSender(undefined))
 }

@@ -2,8 +2,8 @@ import type { DirectorySDK } from "@/context/sdk"
 import {
   buildDeployCliArgs,
   runDeployCli,
-  sendDeployVerification,
-  setActiveDeployVerificationSender,
+  sendDeployInput,
+  setActiveDeployInputSender,
 } from "@/pages/session/cos-deploy-runner"
 
 export type DeployMode = "subdomain" | "domain"
@@ -51,10 +51,18 @@ export type CdnVerifyRecord = {
   fqdn: string
 }
 
+export type RouteDiscoveryOptionSummary = {
+  id: string
+  label: string
+  routeCount: number
+  routePreview: string
+}
+
 export type DeploySseEvent =
   | { type: "step-start"; step: number; total: number; name: string }
   | { type: "step-complete"; step: number; total: number; name: string; message: string }
   | { type: "status"; message: string }
+  | { type: "route-discovery"; sessionId: string; options: RouteDiscoveryOptionSummary[] }
   | { type: "cdn-verification"; sessionId: string; record: CdnVerifyRecord }
   | {
       type: "complete"
@@ -169,8 +177,24 @@ export async function previewCosDeploy(
 }
 
 export async function verifyCdnOwnership(input: { action: "verify" | "refresh" | "cancel" }) {
-  sendDeployVerification(input.action)
+  sendDeployInput({ action: input.action })
   return { ok: input.action === "verify" }
+}
+
+export async function selectRouteDiscoveryOption(input: { sessionId: string; optionId: string }) {
+  sendDeployInput({
+    action: "route-discovery-select",
+    sessionId: input.sessionId,
+    optionId: input.optionId,
+  })
+}
+
+export async function chooseBrowserRouteDiscovery(input: { sessionId: string }) {
+  sendDeployInput({ action: "route-discovery-browser", sessionId: input.sessionId })
+}
+
+export async function cancelRouteDiscovery(input: { sessionId: string }) {
+  sendDeployInput({ action: "route-discovery-cancel", sessionId: input.sessionId })
 }
 
 export async function startCosDeploy(
@@ -197,9 +221,9 @@ export async function startCosDeploy(
       args: deployArgs(input),
     },
     onEvent,
-    onReady: (send) => setActiveDeployVerificationSender(send),
+    onReady: (send) => setActiveDeployInputSender(send),
     signal,
-  }).finally(() => setActiveDeployVerificationSender(undefined))
+  }).finally(() => setActiveDeployInputSender(undefined))
 }
 
 export async function fetchDomainRegistry(ctx: DeployClient) {

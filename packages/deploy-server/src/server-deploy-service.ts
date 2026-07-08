@@ -3,20 +3,20 @@ import { join } from "node:path"
 import {
   DEFAULT_SERVER_PATH,
   DEFAULT_SERVER_USERNAME,
-  formatRouteDiscoverySummary,
-  loadProjectConfig,
   loadServerConfig,
   normalizeDomain,
-  pickDefaultRouteDiscoveryOption,
   resolveSiteBaseDomain,
   serverDeploy,
   validateDomain,
 } from "@opencode-ai/deploy-core"
+import type { DeployInputAction } from "./stdin-bridge.js"
+import { createRouteDiscoverySelectHandler } from "./route-discovery-handler.js"
 import type { SseEvent } from "./types.js"
 
 export const SERVER_DEPLOY_CREDS_FILE = ".opencode-server-deploy-creds.json"
 
 type Emit = (event: SseEvent) => void | Promise<void>
+type WaitForDeployInput = () => Promise<DeployInputAction>
 
 async function emitAndWait(emit: Emit, event: SseEvent) {
   await Promise.resolve(emit(event))
@@ -83,7 +83,11 @@ function resolveServerSiteBaseUrl(domain: string, protocol: "http" | "https") {
   }
 }
 
-export async function runServerDeploy(request: ServerDeployRequest, emit: Emit) {
+export async function runServerDeploy(
+  request: ServerDeployRequest,
+  emit: Emit,
+  waitForInput?: WaitForDeployInput,
+) {
   const host = request.host.trim()
   const username = request.username.trim() || DEFAULT_SERVER_USERNAME
   const path = request.path.trim() || DEFAULT_SERVER_PATH
@@ -95,7 +99,6 @@ export async function runServerDeploy(request: ServerDeployRequest, emit: Emit) 
 
   const { domain, siteBaseUrl } = resolveServerSiteBaseUrl(request.domain, protocol)
   const password = await readDeployPassword(request.projectRoot)
-  const projectConfig = await loadProjectConfig(request.projectRoot)
 
   const result = await serverDeploy(
     {
@@ -118,20 +121,7 @@ export async function runServerDeploy(request: ServerDeployRequest, emit: Emit) 
       onStatus: (message) => {
         emit({ type: "status", message })
       },
-      onRouteDiscoverySelect: async (options) => {
-        if (options.length === 0) return undefined
-        if (options.length === 1) {
-          const option = options[0]
-          if (!option) return undefined
-          emit({ type: "status", message: `使用路由表: ${option.label}` })
-          return option
-        }
-        const selected = pickDefaultRouteDiscoveryOption(options, projectConfig.routeFile)
-        if (selected) {
-          emit({ type: "status", message: `使用路由表: ${formatRouteDiscoverySummary(selected)}` })
-        }
-        return selected
-      },
+      onRouteDiscoverySelect: createRouteDiscoverySelectHandler(emit, waitForInput),
     },
   )
 

@@ -18,10 +18,22 @@ export type DeployVerifyRequest = {
   action: "verify" | "refresh" | "cancel"
 }
 
+export type RouteDiscoveryOptionSummary = {
+  id: string
+  label: string
+  routeCount: number
+  routePreview: string
+}
+
 export type SseEvent =
   | { type: "step-start"; step: number; total: number; name: string }
   | { type: "step-complete"; step: number; total: number; name: string; message: string }
   | { type: "status"; message: string }
+  | {
+      type: "route-discovery"
+      sessionId: string
+      options: RouteDiscoveryOptionSummary[]
+    }
   | {
       type: "cdn-verification"
       sessionId: string

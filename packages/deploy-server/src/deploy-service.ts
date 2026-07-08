@@ -5,13 +5,11 @@ import {
   detectViteProject,
   enrichDeployPlanDns,
   expandCdnDomains,
-  formatRouteDiscoverySummary,
   getDnsZoneDetails,
   getRootDomain,
   loadDeployConfig,
   normalizeDomain,
   normalizeSubdomain,
-  pickDefaultRouteDiscoveryOption,
   ProjectError,
   recordPublishedDomains,
   resolveDeployPlan,
@@ -25,11 +23,12 @@ import {
   type DeployPlan,
 } from "@opencode-ai/deploy-core"
 import type { DeployPreviewRequest, DeployStartRequest, SseEvent } from "./types.js"
+import type { DeployInputAction } from "./stdin-bridge.js"
+import { createRouteDiscoverySelectHandler } from "./route-discovery-handler.js"
 
 type Emit = (event: SseEvent) => void
 
-type VerificationAction = "verify" | "refresh" | "cancel"
-type WaitForVerificationAction = () => Promise<VerificationAction>
+type WaitForDeployInput = () => Promise<DeployInputAction>
 
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
@@ -160,7 +159,7 @@ export async function previewDeploy(request: DeployPreviewRequest) {
 export async function runDeploy(
   request: DeployStartRequest,
   emit: Emit,
-  waitForVerificationAction?: WaitForVerificationAction,
+  waitForInput?: WaitForDeployInput,
 ) {
   let config = await loadDeployConfig(request.projectRoot)
   const plan = await enrichDeployPlanDns(await buildPlan(request), config)
@@ -207,24 +206,15 @@ export async function runDeploy(
     {
       noClean: request.noClean,
       skipCdnAndDns,
-      onRouteDiscoverySelect: async (options) => {
-        if (options.length === 0) return undefined
-        if (options.length === 1) {
-          const option = options[0]
-          if (!option) return undefined
-          emit({ type: "status", message: `使用路由表: ${option.label}` })
-          return option
-        }
-        const selected = pickDefaultRouteDiscoveryOption(options, config.project.routeFile)
-        if (selected) {
-          emit({ type: "status", message: `使用路由表: ${formatRouteDiscoverySummary(selected)}` })
-        }
-        return selected
-      },
+      onRouteDiscoverySelect: createRouteDiscoverySelectHandler(
+        emit,
+        waitForInput,
+        config.project.routeFile,
+      ),
       onCdnVerificationRequired: skipCdnAndDns
         ? undefined
         : async (ctx) => {
-            if (!waitForVerificationAction) {
+            if (!waitForInput) {
               throw new Error("CDN 域名归属验证需要交互式输入，但未提供输入通道")
             }
 
@@ -243,13 +233,13 @@ export async function runDeploy(
             })
 
             while (true) {
-              const action = await waitForVerificationAction()
+              const input = await waitForInput()
 
-              if (action === "cancel") {
+              if (input.action === "cancel") {
                 throw new Error("用户取消 CDN 域名归属验证")
               }
 
-              if (action === "refresh") {
+              if (input.action === "refresh") {
                 emit({ type: "status", message: "正在刷新 CDN 验证记录..." })
                 const record = await ctx.refresh()
                 emit({

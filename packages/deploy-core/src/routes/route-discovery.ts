@@ -26,7 +26,9 @@ export interface CollectRouteDiscoveryOptions {
   onStatus?: (message: string) => void;
 }
 
-function formatRoutePreview(routes: string[], max = 6): string {
+export type RouteDiscoverySelectResult = RouteDiscoveryOption | 'browser';
+
+export function formatRoutePreview(routes: string[], max = 6): string {
   if (routes.length === 0) {
     return '(无)';
   }
@@ -87,11 +89,18 @@ export function pickDefaultRouteDiscoveryOption(
   return options[0];
 }
 
-/** 汇总各方式发现的路由表（构建完成后调用，含浏览器爬取） */
-export async function collectRouteDiscoveryResults(
-  options: CollectRouteDiscoveryOptions,
+export function shouldUseBrowserRouteDiscovery(option: RouteDiscoveryOption | undefined): boolean {
+  return option?.method !== 'routerFile';
+}
+
+export function shouldSkipBrowserRendering(option: RouteDiscoveryOption | undefined): boolean {
+  return option?.method === 'routerFile';
+}
+
+/** 仅检测路由文件与 pages 目录，不启动浏览器 */
+export async function collectStaticRouteDiscoveryResults(
+  projectRoot: string,
 ): Promise<RouteDiscoveryOption[]> {
-  const { projectRoot, outDir, projectConfig, onStatus } = options;
   const results: RouteDiscoveryOption[] = [];
   const candidates = await discoverRouteSources(projectRoot);
 
@@ -119,6 +128,14 @@ export async function collectRouteDiscoveryResults(
     });
   }
 
+  return results;
+}
+
+/** 通过无头浏览器爬取站内链接 */
+export async function collectBrowserRouteDiscoveryOption(
+  options: CollectRouteDiscoveryOptions,
+): Promise<RouteDiscoveryOption> {
+  const { projectRoot, outDir, projectConfig, onStatus } = options;
   const viteBase = await resolveViteBasePath(projectRoot);
   const server = await startSpaStaticServer(outDir, viteBase);
 
@@ -132,19 +149,26 @@ export async function collectRouteDiscoveryResults(
       onStatus,
     });
 
-    results.push({
+    return {
       id: 'crawl',
       label: '浏览器爬取链接',
       method: 'crawl',
       routes,
       source: { kind: 'routes', routes },
       htmlByRoute,
-    });
+    };
   } finally {
     await server.close();
   }
+}
 
-  return results;
+/** @deprecated 请使用 collectStaticRouteDiscoveryResults + collectBrowserRouteDiscoveryOption */
+export async function collectRouteDiscoveryResults(
+  options: CollectRouteDiscoveryOptions,
+): Promise<RouteDiscoveryOption[]> {
+  const staticOptions = await collectStaticRouteDiscoveryResults(options.projectRoot);
+  const crawlOption = await collectBrowserRouteDiscoveryOption(options);
+  return [...staticOptions, crawlOption];
 }
 
 export function routeDiscoveryOptionToSeoInput(option: RouteDiscoveryOption): {

@@ -1,10 +1,14 @@
 import type { ProjectConfig } from '../config/schema.js';
 import { loadProjectConfig } from '../config/loader.js';
 import {
-  collectRouteDiscoveryResults,
+  collectBrowserRouteDiscoveryOption,
+  collectStaticRouteDiscoveryResults,
   pickDefaultRouteDiscoveryOption,
   routeDiscoveryOptionToSeoInput,
+  shouldSkipBrowserRendering,
+  shouldUseBrowserRouteDiscovery,
   type RouteDiscoveryOption,
+  type RouteDiscoverySelectResult,
 } from '../routes/route-discovery.js';
 import { generateSeoArtifacts } from '../seo/generator.js';
 import { buildProjectDist } from './project-build.js';
@@ -16,7 +20,7 @@ export interface BuildProjectWithSeoOptions {
   onStatus?: (message: string) => void;
   onRouteDiscoverySelect?: (
     options: RouteDiscoveryOption[],
-  ) => Promise<RouteDiscoveryOption | undefined>;
+  ) => Promise<RouteDiscoverySelectResult | undefined>;
 }
 
 export interface BuildProjectWithSeoResult {
@@ -24,6 +28,26 @@ export interface BuildProjectWithSeoResult {
   message: string;
   buildCommand: string;
   buildDuration: number;
+}
+
+async function resolveSelectedRouteOption(
+  staticOptions: RouteDiscoveryOption[],
+  projectConfig: ProjectConfig,
+  onRouteDiscoverySelect?: BuildProjectWithSeoOptions['onRouteDiscoverySelect'],
+): Promise<RouteDiscoverySelectResult | undefined> {
+  if (staticOptions.length === 0) {
+    return undefined;
+  }
+
+  if (onRouteDiscoverySelect) {
+    return onRouteDiscoverySelect(staticOptions);
+  }
+
+  if (staticOptions.length === 1) {
+    return staticOptions[0];
+  }
+
+  return pickDefaultRouteDiscoveryOption(staticOptions, projectConfig.routeFile);
 }
 
 export async function buildProjectWithSeo(
@@ -39,19 +63,43 @@ export async function buildProjectWithSeo(
 
   let message = baseBuildMessage;
 
-  const discoveryOptions = await collectRouteDiscoveryResults({
-    projectRoot: options.projectRoot,
-    outDir: builtOutDir,
+  options.onStatus?.('正在检测路由文件...');
+  const staticOptions = await collectStaticRouteDiscoveryResults(options.projectRoot);
+  const selection = await resolveSelectedRouteOption(
+    staticOptions,
     projectConfig,
-    onStatus: options.onStatus,
-  });
+    options.onRouteDiscoverySelect,
+  );
 
-  const selectedOption =
-    discoveryOptions.length === 1
-      ? discoveryOptions[0]
-      : options.onRouteDiscoverySelect
-        ? await options.onRouteDiscoverySelect(discoveryOptions)
-        : pickDefaultRouteDiscoveryOption(discoveryOptions, projectConfig.routeFile);
+  let selectedOption: RouteDiscoveryOption | undefined;
+
+  if (selection === 'browser') {
+    selectedOption = await collectBrowserRouteDiscoveryOption({
+      projectRoot: options.projectRoot,
+      outDir: builtOutDir,
+      projectConfig,
+      onStatus: options.onStatus,
+    });
+  } else if (selection) {
+    selectedOption = shouldUseBrowserRouteDiscovery(selection)
+      ? await collectBrowserRouteDiscoveryOption({
+          projectRoot: options.projectRoot,
+          outDir: builtOutDir,
+          projectConfig,
+          onStatus: options.onStatus,
+        })
+      : selection;
+    if (selectedOption && !shouldUseBrowserRouteDiscovery(selection)) {
+      options.onStatus?.(`使用路由表: ${selectedOption.label}`);
+    }
+  } else {
+    selectedOption = await collectBrowserRouteDiscoveryOption({
+      projectRoot: options.projectRoot,
+      outDir: builtOutDir,
+      projectConfig,
+      onStatus: options.onStatus,
+    });
+  }
 
   if (selectedOption) {
     const seoResult = await generateSeoArtifacts({
@@ -61,6 +109,7 @@ export async function buildProjectWithSeo(
       onStatus: options.onStatus,
       crawlMaxPages: projectConfig.crawlMaxPages,
       crawlMaxDepth: projectConfig.crawlMaxDepth,
+      skipBrowserRendering: shouldSkipBrowserRendering(selectedOption),
       ...routeDiscoveryOptionToSeoInput(selectedOption),
     });
     message += seoResult.renderedWithBrowser

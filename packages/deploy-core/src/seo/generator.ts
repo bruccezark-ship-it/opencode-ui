@@ -21,6 +21,7 @@ export interface GenerateSeoOptions {
   crawl?: boolean;
   crawlMaxPages?: number;
   crawlMaxDepth?: number;
+  skipBrowserRendering?: boolean;
   onStatus?: (message: string) => void;
 }
 
@@ -106,17 +107,23 @@ async function resolveRouteHtmlMap(
   outDir: string,
   routes: string[],
   onStatus?: (message: string) => void,
+  skipBrowserRendering = false,
 ): Promise<{ htmlByRoute: Map<string, string>; renderedWithBrowser: boolean }> {
+  const htmlByRoute = new Map<string, string>();
+  for (const route of routes) {
+    const html = await readStaticHtml(outDir, route);
+    if (html) {
+      htmlByRoute.set(route, html);
+    }
+  }
+
+  if (skipBrowserRendering) {
+    return { htmlByRoute, renderedWithBrowser: false };
+  }
+
   const needsBrowser = routes.some((route) => route !== '/' && !hasDedicatedHtml(outDir, route));
 
   if (!needsBrowser) {
-    const htmlByRoute = new Map<string, string>();
-    for (const route of routes) {
-      const html = await readStaticHtml(outDir, route);
-      if (html) {
-        htmlByRoute.set(route, html);
-      }
-    }
     return { htmlByRoute, renderedWithBrowser: false };
   }
 
@@ -256,6 +263,7 @@ export async function generateSeoArtifacts(options: GenerateSeoOptions): Promise
     outDir,
     routes,
     options.onStatus,
+    options.skipBrowserRendering,
   );
 
   const mdFiles = await writeMarkdownFiles(routes, htmlByRoute, outDir, baseUrl);

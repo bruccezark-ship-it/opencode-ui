@@ -9,6 +9,11 @@ import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
 import { showToast } from "@/utils/toast"
 import {
+  cancelRouteDiscovery,
+  chooseBrowserRouteDiscovery,
+  selectRouteDiscoveryOption,
+} from "@/pages/session/cos-deploy"
+import {
   fetchServerDeployConfigFromProject,
   startServerDeploy,
   type ServerDeploySseEvent,
@@ -18,7 +23,7 @@ type DialogServerPublishProps = {
   projectRoot: string
 }
 
-type Phase = "form" | "progress" | "success"
+type Phase = "form" | "progress" | "route-discovery" | "success"
 
 const DEFAULT_USERNAME = "root"
 const DEFAULT_PATH = "/var/www/html/"
@@ -40,6 +45,11 @@ export function DialogServerPublish(props: DialogServerPublishProps) {
   const [formError, setFormError] = createSignal<string | undefined>()
   const [steps, setSteps] = createStore<Array<{ step: number; total: number; name: string; message?: string }>>([])
   const [statusLines, setStatusLines] = createSignal<string[]>([])
+  const [routeDiscovery, setRouteDiscovery] = createStore({
+    sessionId: "",
+    options: [] as Array<{ id: string; label: string; routeCount: number; routePreview: string }>,
+    message: undefined as string | undefined,
+  })
   const [result, setResult] = createStore({
     host: "",
     remotePath: "",
@@ -84,6 +94,7 @@ export function DialogServerPublish(props: DialogServerPublishProps) {
   function resetProgress() {
     setSteps([])
     setStatusLines([])
+    setRouteDiscovery({ sessionId: "", options: [], message: undefined })
     setResult({ host: "", remotePath: "", uploaded: 0, url: "" })
   }
 
@@ -112,6 +123,15 @@ export function DialogServerPublish(props: DialogServerPublishProps) {
       })
       return
     }
+    if (event.type === "route-discovery") {
+      setRouteDiscovery({
+        sessionId: event.sessionId,
+        options: event.options,
+        message: undefined,
+      })
+      setPhase("route-discovery")
+      return
+    }
     if (event.type === "status") {
       setStatusLines((items) => [...items, event.message])
       return
@@ -128,6 +148,40 @@ export function DialogServerPublish(props: DialogServerPublishProps) {
       if (event.result.domain) setStore("domain", event.result.domain)
       if (event.result.protocol) setStore("protocol", event.result.protocol)
       setPhase("success")
+    }
+  }
+
+  async function runRouteDiscovery(action: "select" | "browser" | "cancel", optionId?: string) {
+    if (!routeDiscovery.sessionId) return
+
+    try {
+      if (action === "select" && optionId) {
+        await selectRouteDiscoveryOption({ sessionId: routeDiscovery.sessionId, optionId })
+        setRouteDiscovery({ sessionId: "", options: [], message: undefined })
+        setPhase("progress")
+        return
+      }
+      if (action === "browser") {
+        await chooseBrowserRouteDiscovery({ sessionId: routeDiscovery.sessionId })
+        setRouteDiscovery({ sessionId: "", options: [], message: undefined })
+        setPhase("progress")
+        return
+      }
+      if (action === "cancel") {
+        await cancelRouteDiscovery({ sessionId: routeDiscovery.sessionId })
+        abort?.abort()
+        setRouteDiscovery({ sessionId: "", options: [], message: undefined })
+        setPhase("form")
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : language.t("session.preview.publishServer.routeDiscoveryFailed")
+      setRouteDiscovery("message", message)
+      showToast({
+        variant: "error",
+        title: language.t("session.preview.publishServer.routeDiscoveryFailed"),
+        description: message,
+      })
     }
   }
 
@@ -175,6 +229,9 @@ export function DialogServerPublish(props: DialogServerPublishProps) {
 
   function close() {
     abort?.abort()
+    if (routeDiscovery.sessionId) {
+      void cancelRouteDiscovery({ sessionId: routeDiscovery.sessionId }).catch(() => {})
+    }
     dialog.close()
   }
 
@@ -294,6 +351,44 @@ export function DialogServerPublish(props: DialogServerPublishProps) {
                     <For each={statusLines()}>{(line) => <div>{line}</div>}</For>
                   </div>
                 </Show>
+              </div>
+            </Match>
+
+            <Match when={phase() === "route-discovery" && routeDiscovery.sessionId}>
+              <div class="space-y-3 text-12-regular text-text-weak">
+                <div>{language.t("session.preview.publishServer.routeDiscoveryTitle")}</div>
+                <div class="space-y-2">
+                  <For each={routeDiscovery.options}>
+                    {(option) => (
+                      <div class="rounded-lg border border-border-weaker-base bg-background-stronger px-3 py-3 space-y-2">
+                        <div class="text-text-base">{option.label}</div>
+                        <div class="text-11-regular text-text-weaker">
+                          {language.t("session.preview.publishServer.routeDiscoveryCount", { count: option.routeCount })}
+                        </div>
+                        <div class="font-mono text-11-regular break-all text-text-weaker">{option.routePreview}</div>
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="small"
+                          onClick={() => void runRouteDiscovery("select", option.id)}
+                        >
+                          {language.t("session.preview.publishServer.routeDiscoveryUseFile")}
+                        </Button>
+                      </div>
+                    )}
+                  </For>
+                </div>
+                <Show when={routeDiscovery.message}>
+                  <div class="text-text-warning">{routeDiscovery.message}</div>
+                </Show>
+                <div class="flex flex-wrap gap-2">
+                  <Button type="button" variant="ghost" size="small" onClick={() => void runRouteDiscovery("browser")}>
+                    {language.t("session.preview.publishServer.routeDiscoveryUseBrowser")}
+                  </Button>
+                  <Button type="button" variant="ghost" size="small" onClick={() => void runRouteDiscovery("cancel")}>
+                    {language.t("common.cancel")}
+                  </Button>
+                </div>
               </div>
             </Match>
 

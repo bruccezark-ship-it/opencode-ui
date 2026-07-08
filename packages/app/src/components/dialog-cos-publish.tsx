@@ -9,21 +9,25 @@ import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
 import { showToast } from "@/utils/toast"
 import {
+  cancelRouteDiscovery,
+  chooseBrowserRouteDiscovery,
   fetchDeployStatus,
   previewCosDeploy,
+  selectRouteDiscoveryOption,
   startCosDeploy,
   verifyCdnOwnership,
   type CdnVerifyRecord,
   type DeployMode,
   type DeployPreview,
   type DeploySseEvent,
+  type RouteDiscoveryOptionSummary,
 } from "@/pages/session/cos-deploy"
 
 type DialogCosPublishProps = {
   projectRoot: string
 }
 
-type Phase = "form" | "progress" | "verification" | "success"
+type Phase = "form" | "progress" | "route-discovery" | "verification" | "success"
 
 export function DialogCosPublish(props: DialogCosPublishProps) {
   const dialog = useDialog()
@@ -48,6 +52,11 @@ export function DialogCosPublish(props: DialogCosPublishProps) {
   const [verification, setVerification] = createStore({
     sessionId: "",
     record: null as CdnVerifyRecord | null,
+    message: undefined as string | undefined,
+  })
+  const [routeDiscovery, setRouteDiscovery] = createStore({
+    sessionId: "",
+    options: [] as RouteDiscoveryOptionSummary[],
     message: undefined as string | undefined,
   })
   const [result, setResult] = createStore({
@@ -169,6 +178,7 @@ export function DialogCosPublish(props: DialogCosPublishProps) {
     setSteps([])
     setStatusLines([])
     setVerification({ sessionId: "", record: null, message: undefined })
+    setRouteDiscovery({ sessionId: "", options: [], message: undefined })
     setResult({ urls: [], cosPath: "", cdnEntries: [] })
   }
 
@@ -196,6 +206,15 @@ export function DialogCosPublish(props: DialogCosPublishProps) {
           setPhase("progress")
         }
       }
+      return
+    }
+    if (event.type === "route-discovery") {
+      setRouteDiscovery({
+        sessionId: event.sessionId,
+        options: event.options,
+        message: undefined,
+      })
+      setPhase("route-discovery")
       return
     }
     if (event.type === "cdn-verification") {
@@ -248,6 +267,40 @@ export function DialogCosPublish(props: DialogCosPublishProps) {
     }
   }
 
+  async function runRouteDiscovery(action: "select" | "browser" | "cancel", optionId?: string) {
+    if (!routeDiscovery.sessionId) return
+
+    try {
+      if (action === "select" && optionId) {
+        await selectRouteDiscoveryOption({ sessionId: routeDiscovery.sessionId, optionId })
+        setRouteDiscovery({ sessionId: "", options: [], message: undefined })
+        setPhase("progress")
+        return
+      }
+      if (action === "browser") {
+        await chooseBrowserRouteDiscovery({ sessionId: routeDiscovery.sessionId })
+        setRouteDiscovery({ sessionId: "", options: [], message: undefined })
+        setPhase("progress")
+        return
+      }
+      if (action === "cancel") {
+        await cancelRouteDiscovery({ sessionId: routeDiscovery.sessionId })
+        abort?.abort()
+        setRouteDiscovery({ sessionId: "", options: [], message: undefined })
+        setPhase("form")
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : language.t("session.preview.publishCos.routeDiscoveryFailed")
+      setRouteDiscovery("message", message)
+      showToast({
+        variant: "error",
+        title: language.t("session.preview.publishCos.routeDiscoveryFailed"),
+        description: message,
+      })
+    }
+  }
+
   async function runVerification(action: "verify" | "refresh" | "cancel") {
     if (!verification.sessionId) return
 
@@ -277,6 +330,9 @@ export function DialogCosPublish(props: DialogCosPublishProps) {
     abort?.abort()
     if (verification.sessionId) {
       void verifyCdnOwnership({ action: "cancel" }).catch(() => {})
+    }
+    if (routeDiscovery.sessionId) {
+      void cancelRouteDiscovery({ sessionId: routeDiscovery.sessionId }).catch(() => {})
     }
     dialog.close()
   }
@@ -437,6 +493,44 @@ export function DialogCosPublish(props: DialogCosPublishProps) {
                   <For each={statusLines()}>{(line) => <div>{line}</div>}</For>
                 </div>
               </Show>
+            </div>
+          </Match>
+
+          <Match when={phase() === "route-discovery" && routeDiscovery.sessionId}>
+            <div class="space-y-3 text-12-regular text-text-weak">
+              <div>{language.t("session.preview.publishCos.routeDiscoveryTitle")}</div>
+              <div class="space-y-2">
+                <For each={routeDiscovery.options}>
+                  {(option) => (
+                    <div class="rounded-lg border border-border-weaker-base bg-background-stronger px-3 py-3 space-y-2">
+                      <div class="text-text-base">{option.label}</div>
+                      <div class="text-11-regular text-text-weaker">
+                        {language.t("session.preview.publishCos.routeDiscoveryCount", { count: option.routeCount })}
+                      </div>
+                      <div class="font-mono text-11-regular break-all text-text-weaker">{option.routePreview}</div>
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="small"
+                        onClick={() => void runRouteDiscovery("select", option.id)}
+                      >
+                        {language.t("session.preview.publishCos.routeDiscoveryUseFile")}
+                      </Button>
+                    </div>
+                  )}
+                </For>
+              </div>
+              <Show when={routeDiscovery.message}>
+                <div class="text-text-warning">{routeDiscovery.message}</div>
+              </Show>
+              <div class="flex flex-wrap gap-2">
+                <Button type="button" variant="ghost" size="small" onClick={() => void runRouteDiscovery("browser")}>
+                  {language.t("session.preview.publishCos.routeDiscoveryUseBrowser")}
+                </Button>
+                <Button type="button" variant="ghost" size="small" onClick={() => void runRouteDiscovery("cancel")}>
+                  {language.t("common.cancel")}
+                </Button>
+              </div>
             </div>
           </Match>
 

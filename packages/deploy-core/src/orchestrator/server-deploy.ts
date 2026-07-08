@@ -7,7 +7,7 @@ import {
   type ServerConfig,
 } from '../server/server-config.js';
 import { uploadDirectoryToServer } from '../server/server-uploader.js';
-import type { RouteDiscoveryOption } from '../routes/route-discovery.js';
+import type { RouteDiscoveryOption, RouteDiscoverySelectResult } from '../routes/route-discovery.js';
 
 export interface ServerDeployContext {
   projectRoot: string;
@@ -40,7 +40,7 @@ export interface ServerDeployOptions {
   onStatus?: (message: string) => void;
   onRouteDiscoverySelect?: (
     options: RouteDiscoveryOption[],
-  ) => Promise<RouteDiscoveryOption | undefined>;
+  ) => Promise<RouteDiscoverySelectResult | undefined>;
 }
 
 const TOTAL_STEPS = 2;
