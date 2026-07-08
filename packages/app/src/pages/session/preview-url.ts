@@ -108,25 +108,19 @@ export function buildPreviewUrl(host: string, port: number) {
   return `http://${host}:${port}`
 }
 
-export function canUsePreviewProxy(host: string) {
-  return host === "localhost" || host === "127.0.0.1"
-}
-
-export function buildPreviewProxyUrl(port: number, origin?: string) {
-  const base =
-    origin ?? (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000")
-  return `${base}/__oc_preview/${port}/`
-}
-
-export function resolvePreviewFrameUrl(input: {
-  url: string
-  port: number
-  host: string
-  useInspector?: boolean
-  origin?: string
-}) {
-  if (!input.useInspector || !canUsePreviewProxy(input.host)) return input.url
-  return buildPreviewProxyUrl(input.port, input.origin)
+export async function findAvailablePreviewPort(
+  host: string,
+  preferredPort: number,
+  options?: { maxAttempts?: number; probe?: (url: string) => Promise<boolean> },
+) {
+  const maxAttempts = options?.maxAttempts ?? 30
+  const probe = options?.probe ?? probePreviewUrl
+  for (let offset = 0; offset < maxAttempts; offset++) {
+    const port = preferredPort + offset
+    const occupied = await probe(buildPreviewUrl(host, port))
+    if (!occupied) return port
+  }
+  return preferredPort
 }
 
 export function normalizePreviewUrl(input: string) {

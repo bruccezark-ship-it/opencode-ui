@@ -16,6 +16,8 @@ export type ProjectStructure = {
   packageJson: PackageJson | null
   workspacePackageJson: PackageJson | null
   viteConfig: string | null
+  workspaceRootDir: string
+  packagePath: string
 }
 
 export type PreviewStartPlan = {
@@ -27,8 +29,6 @@ export type PreviewStartPlan = {
   args: string[]
   cwd?: string
   env?: Record<string, string>
-  /** Vite projects use the UI preview proxy for element picking (does not affect the start command). */
-  useInspector?: boolean
 }
 
 export function detectPackageManager(input: {
@@ -38,8 +38,8 @@ export function detectPackageManager(input: {
   workspaceRootFiles?: string[]
 }) {
   const files = new Set([...(input.workspaceRootFiles ?? []), ...input.rootFiles].map((name) => name.toLowerCase()))
+  if (files.has("pnpm-workspace.yaml") || files.has("pnpm-lock.yaml")) return "pnpm" as const
   if (files.has("bun.lockb") || files.has("bun.lock")) return "bun" as const
-  if (files.has("pnpm-lock.yaml")) return "pnpm" as const
   if (files.has("yarn.lock")) return "yarn" as const
   if (files.has("package-lock.json")) return "npm" as const
 
@@ -75,6 +75,115 @@ export function buildPackageManagerRun(manager: PackageManager, script: string, 
   }
 }
 
+export function buildPnpmFilterRun(packageName: string, script: string, extraArgs: string[] = []) {
+  return { command: "pnpm", args: ["--filter", packageName, "run", script, ...extraArgs] }
+}
+
+export function parseDevScriptParts(script: string) {
+  const parts: string[] = []
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(script.trim())) !== null) {
+    parts.push(match[1] ?? match[2] ?? match[3])
+  }
+  return parts
+}
+
+export function buildDevScriptPortArgs(input: {
+  remote: boolean
+  packageJson?: PackageJson | null
+  viteConfig?: string | null
+  script?: string
+  previewPort: number
+}) {
+  const flags: string[] = []
+  if (input.remote && usesVite(input)) flags.push("--host")
+  if (input.remote && usesNext(input)) flags.push("-H", "0.0.0.0")
+  if (usesVite(input)) {
+    flags.push("--port", String(input.previewPort), "--strictPort")
+  } else if (usesNext(input)) {
+    flags.push("-p", String(input.previewPort))
+  } else {
+    const configPort = input.viteConfig ? extractPortFromViteConfig(input.viteConfig) : undefined
+    if (configPort && input.previewPort !== configPort) {
+      flags.push("--port", String(input.previewPort), "--strictPort")
+    }
+  }
+  return flags
+}
+
+export function hasDevViteConfig(rootFiles: string[]) {
+  return rootFiles.some((file) => file.toLowerCase() === "vite.config.dev.ts")
+}
+
+export function resolvePnpmDevScriptParts(structure: ProjectStructure, devScript: string) {
+  const parts = parseDevScriptParts(devScript)
+  if (!hasDevViteConfig(structure.rootFiles)) return parts
+  if (parts[0] !== "vite") return parts
+
+  const configIndex = parts.findIndex((part) => part === "--config" || part === "-c")
+  if (configIndex !== -1) return parts
+
+  parts.splice(1, 0, "--config", "vite.config.dev.ts")
+  return parts
+}
+
+export function buildPnpmLocalDevRun(structure: ProjectStructure, devScript: string, portArgs: string[] = []) {
+  return { command: "pnpm", args: [...resolvePnpmDevScriptParts(structure, devScript), ...portArgs] }
+}
+
+export function previewPackageCwd(structure: ProjectStructure) {
+  if (structure.rootDir) return structure.rootDir
+  if (structure.workspaceRootDir) return undefined
+  return structure.packagePath || undefined
+}
+
+export function isPreviewStartable(structure: ProjectStructure) {
+  if (structure.kind === "static") return true
+  if (structure.kind === "python" && structure.rootFiles.some((file) => file === "manage.py")) return true
+  if (structure.kind === "node" && structure.packageJson) {
+    return Boolean(resolveDevScriptName(structure.packageJson.scripts))
+  }
+  return false
+}
+
+export function matchesWorkspaceTarget(delegatedCwd: string | undefined, structure: ProjectStructure) {
+  if (!delegatedCwd) return false
+  if (delegatedCwd === structure.rootDir) return true
+  if (delegatedCwd === structure.packagePath) return true
+  return false
+}
+
+export function matchesPnpmFilterTarget(filter: string, structure: ProjectStructure) {
+  const normalized = filter.replace(/^['"]|['"]$/g, "")
+  const packageName = structure.packageJson?.name
+  if (packageName && (normalized === packageName || normalized.endsWith(`/${packageName}`))) return true
+  if (structure.packagePath) {
+    if (normalized === structure.packagePath) return true
+    if (normalized === `./${structure.packagePath}`) return true
+    if (normalized.endsWith(`/${structure.packagePath}`)) return true
+  }
+  return false
+}
+
+export function isPnpmWorkspaceStructure(structure: ProjectStructure) {
+  const files = new Set(structure.workspaceRootFiles.map((name) => name.toLowerCase()))
+  if (files.has("pnpm-workspace.yaml") || files.has("pnpm-lock.yaml")) return true
+  if (structure.workspacePackageJson?.packageManager?.split("@")[0] === "pnpm") return true
+  return (
+    detectPackageManager({
+      packageJson: structure.packageJson,
+      workspacePackageJson: structure.workspacePackageJson,
+      rootFiles: structure.rootFiles,
+      workspaceRootFiles: structure.workspaceRootFiles,
+    }) === "pnpm"
+  )
+}
+
+export function shouldUsePnpmLocalDev(structure: ProjectStructure) {
+  return isPnpmWorkspaceStructure(structure)
+}
+
 export function usesVite(input: { packageJson?: PackageJson | null; viteConfig?: string | null; script?: string }) {
   const deps = { ...input.packageJson?.dependencies, ...input.packageJson?.devDependencies }
   return Boolean(
@@ -97,13 +206,7 @@ export function buildDevScriptExtraArgs(input: {
   script?: string
   previewPort: number
 }) {
-  const flags: string[] = []
-  if (input.remote && usesVite(input)) flags.push("--host")
-  if (input.remote && usesNext(input)) flags.push("-H", "0.0.0.0")
-  const configPort = input.viteConfig ? extractPortFromViteConfig(input.viteConfig) : undefined
-  if (configPort && input.previewPort !== configPort) {
-    flags.push("--port", String(input.previewPort), "--strictPort")
-  }
+  const flags = buildDevScriptPortArgs(input)
   if (flags.length === 0) return []
   return ["--", ...flags]
 }
@@ -144,11 +247,15 @@ function remoteDevEnv(remote: boolean) {
   }
 }
 
-function previewEnv(remote: boolean) {
-  return {
+function previewEnv(remote: boolean, structure?: ProjectStructure) {
+  const env: Record<string, string> = {
     BROWSER: "none",
     ...(remoteDevEnv(remote) ?? {}),
   }
+  if (structure && shouldUsePnpmLocalDev(structure)) {
+    env.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"
+  }
+  return env
 }
 
 function resolveNodeStartPlan(input: {
@@ -160,31 +267,24 @@ function resolveNodeStartPlan(input: {
   scriptPackageJson: PackageJson
   script: string
   label: string
+  run?: { command: string; args: string[] }
 }) {
   const scripts = input.scriptPackageJson.scripts ?? {}
   const devScript = scripts[input.script] ?? input.script
-  const vite = usesVite({
-    packageJson: input.structure.packageJson,
-    viteConfig: input.structure.viteConfig,
-    script: devScript,
-  })
   const manager = detectPackageManager({
     packageJson: input.scriptPackageJson,
     workspacePackageJson: input.structure.workspacePackageJson,
     rootFiles: input.structure.rootFiles,
     workspaceRootFiles: input.structure.workspaceRootFiles,
   })
-  const run = buildPackageManagerRun(
-    manager,
-    input.script,
-    buildDevScriptExtraArgs({
-      remote: input.remote,
-      packageJson: input.structure.packageJson,
-      viteConfig: input.structure.viteConfig,
-      script: devScript,
-      previewPort: input.preview.port,
-    }),
-  )
+  const extraArgs = buildDevScriptExtraArgs({
+    remote: input.remote,
+    packageJson: input.structure.packageJson,
+    viteConfig: input.structure.viteConfig,
+    script: devScript,
+    previewPort: input.preview.port,
+  })
+  const run = input.run ?? buildPackageManagerRun(manager, input.script, extraArgs)
 
   return {
     kind: "node" as const,
@@ -194,9 +294,41 @@ function resolveNodeStartPlan(input: {
     command: run.command,
     args: run.args,
     cwd: input.cwd,
-    env: previewEnv(input.remote),
-    useInspector: vite,
+    env: previewEnv(input.remote, input.structure),
   }
+}
+
+function resolvePnpmLocalStartPlan(input: {
+  structure: ProjectStructure
+  host: string
+  remote: boolean
+  preview: { url: string; port: number }
+  script: string
+  scripts: Record<string, string>
+}) {
+  const { structure, remote, preview, script, scripts } = input
+  const devScript = scripts[script] ?? script
+  const portArgs = buildDevScriptPortArgs({
+    remote,
+    packageJson: structure.packageJson,
+    viteConfig: structure.viteConfig,
+    script: devScript,
+    previewPort: preview.port,
+  })
+  const run = buildPnpmLocalDevRun(structure, devScript, portArgs)
+  const cwd = previewPackageCwd(structure)
+
+  return resolveNodeStartPlan({
+    structure,
+    host: input.host,
+    remote,
+    preview,
+    cwd,
+    scriptPackageJson: structure.packageJson!,
+    script,
+    label: ["pnpm", ...run.args].join(" "),
+    run,
+  })
 }
 
 export function detectProjectKind(rootFiles: string[], packageJson: PackageJson | null) {
@@ -221,18 +353,32 @@ export function resolvePreviewStartPlan(input: {
     const delegatedCwd = workspaceDev ? parseScriptCwd(workspaceDev) : undefined
     const workspaceScript = workspace ? resolveDevScriptName(workspace.scripts ?? {}) : undefined
 
+    const scripts = structure.packageJson.scripts ?? {}
+    const script = resolveDevScriptName(scripts)
+    if (!script) return
+
+    if (shouldUsePnpmLocalDev(structure)) {
+      return resolvePnpmLocalStartPlan({
+        structure,
+        host,
+        remote,
+        preview,
+        script,
+        scripts,
+      })
+    }
+
     if (
-      structure.rootDir &&
-      delegatedCwd === structure.rootDir &&
       workspace &&
-      workspaceScript
+      workspaceScript &&
+      matchesWorkspaceTarget(delegatedCwd, structure)
     ) {
       return resolveNodeStartPlan({
         structure,
         host,
         remote,
         preview,
-        cwd: undefined,
+        cwd: structure.workspaceRootDir || undefined,
         scriptPackageJson: workspace,
         script: workspaceScript,
         label: `${detectPackageManager({
@@ -243,10 +389,6 @@ export function resolvePreviewStartPlan(input: {
         })} run ${workspaceScript}`,
       })
     }
-
-    const scripts = structure.packageJson.scripts ?? {}
-    const script = resolveDevScriptName(scripts)
-    if (!script) return
 
     return resolveNodeStartPlan({
       structure,

@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import {
   avoidWebUiPortConflict,
-  buildPreviewProxyUrl,
   extractPortFromScript,
   extractPortFromViteConfig,
+  findAvailablePreviewPort,
   previewHostFromServer,
-  resolvePreviewFrameUrl,
   resolveProjectPreview,
   validatePreviewHtmlForTest,
 } from "./preview-url"
@@ -83,7 +82,21 @@ describe("resolveProjectPreview", () => {
   })
 })
 
-describe("avoidWebUiPortConflict", () => {
+describe("findAvailablePreviewPort", () => {
+  test("returns preferred port when free", async () => {
+    const port = await findAvailablePreviewPort("localhost", 5173, {
+      probe: async () => false,
+    })
+    expect(port).toBe(5173)
+  })
+
+  test("skips occupied ports", async () => {
+    const port = await findAvailablePreviewPort("localhost", 5173, {
+      probe: async (url) => url.includes(":5173") || url.includes(":5174"),
+    })
+    expect(port).toBe(5175)
+  })
+})
   test("falls back to 5173 when preview port matches current page", () => {
     expect(avoidWebUiPortConflict(3000, true, 3000)).toBe(5173)
     expect(avoidWebUiPortConflict(3000, true, 5173)).toBe(3000)
@@ -100,23 +113,5 @@ describe("validatePreviewHtmlForTest", () => {
     expect(validatePreviewHtmlForTest('<script type="module" src="/@vite/client"></script>', "http://localhost:5173")).toBe(
       true,
     )
-  })
-})
-
-describe("preview proxy url", () => {
-  test("builds same-origin proxy path", () => {
-    expect(buildPreviewProxyUrl(5173, "http://localhost:3000")).toBe("http://localhost:3000/__oc_preview/5173/")
-  })
-
-  test("uses proxy for local vite previews", () => {
-    expect(
-      resolvePreviewFrameUrl({
-        url: "http://localhost:5173",
-        port: 5173,
-        host: "localhost",
-        useInspector: true,
-        origin: "http://localhost:3000",
-      }),
-    ).toBe("http://localhost:3000/__oc_preview/5173/")
   })
 })

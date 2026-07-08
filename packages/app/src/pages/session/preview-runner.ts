@@ -1,5 +1,5 @@
 import type { DirectorySDK } from "@/context/sdk"
-import { probePreviewUrl } from "@/pages/session/preview-url"
+import { buildPreviewUrl, findAvailablePreviewPort, probePreviewUrl } from "@/pages/session/preview-url"
 import {
   PREVIEW_PTY_TITLE,
   PREVIEW_START_TIMEOUT_MS,
@@ -60,81 +60,111 @@ async function waitForPreviewUrl(url: string, signal: AbortSignal) {
   return false
 }
 
+function previewHostFromPlan(plan: PreviewStartPlan) {
+  try {
+    return new URL(plan.url).hostname
+  } catch {
+    return "localhost"
+  }
+}
+
 export async function ensurePreviewDevServer(input: {
   client: DirectorySDK["client"]
   plan: PreviewStartPlan
   serverUrl: string
   ptyId?: string
+  storedUrl?: string
   signal: AbortSignal
   onPhase: (phase: PreviewRunPhase) => void
   onPtyId: (ptyId: string) => void
+  onResolvedUrl?: (url: string) => void
+  resolvePlanWithPort?: (port: number) => PreviewStartPlan
   onError?: (error: PreviewStartError) => void
 }) {
-  const displayCommand = formatPreviewShellCommand(input.plan)
-
   input.onPhase("checking")
-  if (await probePreviewUrl(input.plan.url)) {
-    input.onPhase("ready")
-    return true
+
+  let plan = input.plan
+  let active = await listRunningPreviewPty(input.client, input.ptyId)
+
+  if (active) {
+    input.onPtyId(active.id)
+    const targetUrl = input.storedUrl || plan.url
+    input.onResolvedUrl?.(targetUrl)
+    input.onPhase("waiting")
+    const ready = await waitForPreviewUrl(targetUrl, input.signal)
+    if (!ready) {
+      input.onError?.({
+        message: `Timed out waiting for ${targetUrl}`,
+        command: formatPreviewShellCommand(plan),
+      })
+    }
+    input.onPhase(ready ? "ready" : "failed")
+    return ready
   }
 
-  let active = await listRunningPreviewPty(input.client, input.ptyId)
-  if (!active) {
-    input.onPhase("starting")
-    const platform = previewLaunchPlatform(input.serverUrl)
-    const launch =
-      platform === "windows"
-        ? buildPreviewPtyLaunch(input.plan, platform)
-        : {
-            command: input.plan.command,
-            args: input.plan.args,
-            env: input.plan.env,
-            cwd: input.plan.cwd,
-          }
+  const host = previewHostFromPlan(plan)
+  const availablePort = await findAvailablePreviewPort(host, plan.port)
+  plan = input.resolvePlanWithPort?.(availablePort) ?? {
+    ...plan,
+    port: availablePort,
+    url: buildPreviewUrl(host, availablePort),
+  }
+  input.onResolvedUrl?.(plan.url)
 
-    const created = await input.client.pty
-      .create({
-        command: launch.command,
-        args: launch.args,
-        cwd: "cwd" in launch ? launch.cwd : undefined,
-        title: PREVIEW_PTY_TITLE,
-        env: launch.env,
-      })
-      .catch((error) => {
-        console.error("[session-preview] failed to start dev server", error)
-        input.onError?.({
-          message: error instanceof Error ? error.message : "Failed to create PTY session",
-          command: displayCommand,
-        })
-        return undefined
-      })
+  const displayCommand = formatPreviewShellCommand(plan)
 
-    active = created?.data
-    if (!active) {
-      input.onPhase("failed")
-      return false
-    }
-    input.onPtyId(active.id)
+  input.onPhase("starting")
+  const platform = previewLaunchPlatform(input.serverUrl)
+  const launch =
+    platform === "windows"
+      ? buildPreviewPtyLaunch(plan, platform)
+      : {
+          command: plan.command,
+          args: plan.args,
+          env: plan.env,
+          cwd: plan.cwd,
+        }
 
-    const verified = await verifyPreviewPty(input.client, active.id)
-    if (!verified.ok) {
+  const created = await input.client.pty
+    .create({
+      command: launch.command,
+      args: launch.args,
+      cwd: "cwd" in launch ? launch.cwd : undefined,
+      title: PREVIEW_PTY_TITLE,
+      env: launch.env,
+    })
+    .catch((error) => {
+      console.error("[session-preview] failed to start dev server", error)
       input.onError?.({
-        message: verified.message,
+        message: error instanceof Error ? error.message : "Failed to create PTY session",
         command: displayCommand,
-        exitCode: verified.exitCode,
       })
-      input.onPhase("failed")
-      return false
-    }
-  } else {
-    input.onPtyId(active.id)
+      return undefined
+    })
+
+  active = created?.data
+  if (!active) {
+    input.onPhase("failed")
+    return false
+  }
+  input.onPtyId(active.id)
+
+  const verified = await verifyPreviewPty(input.client, active.id)
+  if (!verified.ok) {
+    input.onError?.({
+      message: verified.message,
+      command: displayCommand,
+      exitCode: verified.exitCode,
+    })
+    input.onPhase("failed")
+    return false
   }
 
   input.onPhase("waiting")
-  const ready = await waitForPreviewUrl(input.plan.url, input.signal)
+  const ready = await waitForPreviewUrl(plan.url, input.signal)
   if (!ready) {
     input.onError?.({
-      message: `Timed out waiting for ${input.plan.url}`,
+      message: `Timed out waiting for ${plan.url}`,
       command: displayCommand,
     })
   }
