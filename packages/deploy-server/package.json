@@ -1,0 +1,24 @@
+{
+  "name": "@opencode-ai/deploy-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:cli": "bunx tsc -p tsconfig.build.json",
+    "build:deploy": "bun --cwd ../deploy-core run build && bun run build:cli",
+    "deploy": "node dist/cli.js",
+    "setup-browser": "bun run scripts/setup-browser.ts",
+    "postinstall": "bun run build:deploy && bun run scripts/setup-browser.ts"
+  },
+  "bin": {
+    "opencode-deploy": "./src/cli.ts"
+  },
+  "dependencies": {
+    "@opencode-ai/deploy-core": "workspace:*",
+    "playwright-core": "^1.51.0"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "typescript": "catalog:"
+  }
+}

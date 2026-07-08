@@ -6,6 +6,9 @@ interface ImportMetaEnv {
   readonly VITE_SENTRY_DSN?: string
   readonly VITE_SENTRY_ENVIRONMENT?: string
   readonly VITE_SENTRY_RELEASE?: string
+  readonly VITE_DEPLOY_CLI_SCRIPT?: string
+  readonly VITE_PLAYWRIGHT_BROWSERS_PATH?: string
+  readonly VITE_DEPLOY_NODE_RUNTIME?: string
 }
 
 interface ImportMeta {

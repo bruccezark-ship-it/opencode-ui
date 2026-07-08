@@ -1,37 +1,63 @@
-## Usage
+# Web UI 主应用
 
-Dependencies for these templates are managed with [pnpm](https://pnpm.io) using `pnpm up -Lri`.
+OpenWeb UI 的前端应用，基于 Vite + SolidJS 构建，通过 `@opencode-ai/sdk` 连接 `opencode serve` 后端。
 
-This is the reason you see a `pnpm-lock.yaml`. That said, any package manager will work. This file can safely be removed once you clone a template.
+## 前置要求
+
+- [Bun](https://bun.sh) >= 1.3.14
+- 已运行的 `opencode serve`（默认 `localhost:4096`）
+
+## 快速开始
+
+### 1. 配置环境变量
+
+复制 `.env.example` 为 `.env` 并按需修改：
 
 ```bash
-$ npm install # or pnpm install or yarn install
+cp .env.example .env
 ```
 
-### Learn more on the [Solid Website](https://solidjs.com) and come chat with us on our [Discord](https://discord.com/invite/solidjs)
+### 2. 启动开发服务器
 
-## Available Scripts
+在 monorepo 根目录：
 
-In the project directory, you can run:
+```bash
+bun run dev
+```
 
-### `npm run dev` or `npm start`
+或在本目录：
 
-Runs the app in the development mode.<br>
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+```bash
+bun run dev
+```
 
-The page will reload if you make edits.<br>
+浏览器打开 [http://localhost:3000](http://localhost:3000)。
 
-### `npm run build`
+修改代码后页面会自动热更新。
 
-Builds the app for production to the `dist` folder.<br>
-It correctly bundles Solid in production mode and optimizes the build for the best performance.
+## 环境变量
 
-The build is minified and the filenames include the hashes.<br>
-Your app is ready to be deployed!
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `VITE_OPENCODE_SERVER_HOST` | `localhost` | opencode serve 主机 |
+| `VITE_OPENCODE_SERVER_PORT` | `4096` | opencode serve 端口 |
+| `VITE_DEPLOY_CLI_SCRIPT` | — | COS 发布 CLI 绝对路径（启用 COS 发布时必填） |
+| `VITE_PLAYWRIGHT_BROWSERS_PATH` | 自动推导 | Chromium 目录，供 COS 发布 SEO 抓取使用 |
 
-## E2E Testing
+完整说明见仓库根目录 [README.md](../../README.md) 与 [deploy-server 文档](../deploy-server/README.md)。
 
-Playwright starts the Vite dev server automatically via `webServer`, and UI tests expect an opencode backend at `localhost:4096` by default.
+## 可用命令
+
+| 命令 | 说明 |
+|------|------|
+| `bun run dev` | 启动 Vite 开发服务器（端口 3000） |
+| `bun run build` | 构建生产版本到 `dist/` |
+| `bun run serve` | 预览生产构建 |
+| `bun run test:e2e:local` | 运行 Playwright 端到端测试 |
+
+## 端到端测试
+
+Playwright 会通过 `webServer` 自动启动 Vite 开发服务器，默认期望 opencode 后端运行在 `localhost:4096`。
 
 ```bash
 bunx playwright install chromium
@@ -39,12 +65,19 @@ bun run test:e2e:local
 bun run test:e2e:local -- --grep "settings"
 ```
 
-Environment options:
+可选环境变量：
 
-- `PLAYWRIGHT_SERVER_HOST` / `PLAYWRIGHT_SERVER_PORT` (backend address, default: `localhost:4096`)
-- `PLAYWRIGHT_PORT` (Vite dev server port, default: `3000`)
-- `PLAYWRIGHT_BASE_URL` (override base URL, default: `http://localhost:<PLAYWRIGHT_PORT>`)
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PLAYWRIGHT_SERVER_HOST` | `localhost` | 测试时 opencode 后端主机 |
+| `PLAYWRIGHT_SERVER_PORT` | `4096` | 测试时 opencode 后端端口 |
+| `PLAYWRIGHT_PORT` | `3000` | Vite 开发服务器端口 |
+| `PLAYWRIGHT_BASE_URL` | `http://localhost:<PORT>` | 覆盖测试基础 URL |
 
-## Deployment
+## 生产部署
 
-You can deploy the `dist` folder to any static host provider (netlify, surge, now, etc.)
+```bash
+bun run build
+```
+
+将 `dist/` 目录部署到任意静态文件托管服务。需确保用户浏览器能访问到 `opencode serve` API，或将 UI 与 API 部署在同一域名下。

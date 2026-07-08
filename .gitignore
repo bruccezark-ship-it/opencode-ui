@@ -6,3 +6,6 @@ dist/
 .env.local
 .DS_Store
 Thumbs.db
+packages/deploy-server/browsers/
+packages/deploy-server/dist/
+packages/deploy-core/dist/

@@ -53,6 +53,7 @@ import {
 } from "@/pages/session/preview-url"
 
 import { Persist, persisted } from "@/utils/persist"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
 
 
 
@@ -63,6 +64,7 @@ const PROBE_INTERVAL_MS = 3000
 export function SessionPreviewTab() {
 
   const language = useLanguage()
+  const dialog = useDialog()
 
   const sdk = useSDK()
 
@@ -526,6 +528,13 @@ export function SessionPreviewTab() {
 
   }
 
+  const openCosPublish = () => {
+    const root = worktree()
+    void import("@/components/dialog-cos-publish").then((module) => {
+      dialog.show(() => <module.DialogCosPublish projectRoot={root} />)
+    })
+  }
+
 
 
   const statusKey = createMemo(() => previewPhaseMessageKey(phase()))
@@ -690,7 +699,7 @@ export function SessionPreviewTab() {
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content class="min-w-[140px]">
-              <DropdownMenu.Item onSelect={() => {}}>
+              <DropdownMenu.Item onSelect={openCosPublish}>
                 <DropdownMenu.ItemLabel>{language.t("session.preview.publishCos")}</DropdownMenu.ItemLabel>
               </DropdownMenu.Item>
               <DropdownMenu.Item onSelect={() => {}}>

@@ -9,7 +9,10 @@
     "dev": "bun --cwd packages/app dev",
     "build": "bun --cwd packages/app build",
     "serve": "bun --cwd packages/app serve",
-    "preview": "bun --cwd packages/app serve"
+    "preview": "bun --cwd packages/app serve",
+    "setup-browser": "bun --cwd packages/deploy-server run setup-browser",
+    "build:deploy": "bun --cwd packages/deploy-core run build && bun --cwd packages/deploy-server run build:cli",
+    "build:deploy-cli": "bun --cwd packages/deploy-server run build:cli"
   },
   "workspaces": {
     "packages": [
