@@ -4,6 +4,10 @@ import { createStore } from "solid-js/store"
 
 import { IconButton } from "@opencode-ai/ui/icon-button"
 
+import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
+
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
+
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 
 import { Icon } from "@opencode-ai/ui/v2/icon"
@@ -672,6 +676,29 @@ export function SessionPreviewTab() {
           </TooltipV2>
 
         </Show>
+
+        <DropdownMenu gutter={4} placement="bottom-end">
+          <DropdownMenu.Trigger
+            as={ButtonV2}
+            size="small"
+            variant="outline"
+            class="shrink-0 gap-1 px-2 data-[expanded]:bg-surface-base-active"
+            aria-label={language.t("session.preview.publish")}
+          >
+            {language.t("session.preview.publish")}
+            <Icon name="chevron-down" size="small" class="text-icon-weak" />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content class="min-w-[140px]">
+              <DropdownMenu.Item onSelect={() => {}}>
+                <DropdownMenu.ItemLabel>{language.t("session.preview.publishCos")}</DropdownMenu.ItemLabel>
+              </DropdownMenu.Item>
+              <DropdownMenu.Item onSelect={() => {}}>
+                <DropdownMenu.ItemLabel>{language.t("session.preview.publishServer")}</DropdownMenu.ItemLabel>
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu>
 
         <TooltipV2 value={language.t("session.preview.openExternal")}>
 
