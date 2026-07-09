@@ -580,6 +580,39 @@ export function SessionPreviewTab() {
     })
   }
 
+  const gitflowProjectRelative = createMemo(() => {
+    const structure = projectStructure()
+    if (!structure || structure.kind !== "node") return ""
+    const path = structure.packagePath || structure.rootDir || ""
+    return path.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")
+  })
+
+  const gitflowProjectRoot = createMemo(() => {
+    const relative = gitflowProjectRelative()
+    const root = worktree()
+    return relative ? `${root.replace(/\\/g, "/").replace(/\/+$/, "")}/${relative}` : root
+  })
+
+  const canGitflow = createMemo(() => {
+    const structure = projectStructure()
+    return structure?.kind === "node" && !projectStructure.loading
+  })
+
+  const openGitflow = () => {
+    const root = gitflowProjectRoot()
+    const relative = gitflowProjectRelative()
+    void import("@/components/dialog-gitflow").then((module) => {
+      dialog.show(() => (
+        <module.DialogGitflow
+          projectRoot={root}
+          projectRelativeDir={relative || undefined}
+          readFile={readWorktreeFile}
+          listFiles={listWorktreeFiles}
+        />
+      ))
+    })
+  }
+
 
 
   const statusKey = createMemo(() => previewPhaseMessageKey(phase()))
@@ -796,6 +829,21 @@ export function SessionPreviewTab() {
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu>
+
+        <Show when={canGitflow()}>
+          <TooltipV2 value={language.t("session.preview.gitflow")}>
+            <ButtonV2
+              size="small"
+              variant="outline"
+              class="shrink-0 gap-1 px-2"
+              aria-label={language.t("session.preview.gitflow")}
+              onClick={openGitflow}
+            >
+              <Icon name="branch" size="small" />
+              {language.t("session.preview.gitflow")}
+            </ButtonV2>
+          </TooltipV2>
+        </Show>
 
         <TooltipV2 value={language.t("session.preview.openExternal")}>
 
