@@ -27,6 +27,7 @@ import { useGlobal } from "@/context/global"
 import { ServerConnection, useServer } from "@/context/server"
 import { tabKey, useTabs } from "@/context/tabs"
 import "./titlebar.css"
+import { GitHubProjectsMenu } from "./github-projects-menu"
 import { newTabTooltipKeybind } from "./command-tooltip-keybind"
 
 type TauriDesktopWindow = {
@@ -674,7 +675,9 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
               data-tauri-drag-region
               onMouseDown={drag}
             >
-              <div id="opencode-titlebar-right" class="flex items-center gap-1 shrink-0 justify-end" />
+              <div id="opencode-titlebar-right" class="flex items-center gap-1 shrink-0 justify-end">
+                <GitHubProjectsMenu />
+              </div>
               <Show when={windows()}>
                 {!tauriApi() && <div class="shrink-0" style={{ width: windowsControlsWidth() }} />}
                 <div data-tauri-decorum-tb class="flex flex-row" />
@@ -706,7 +709,9 @@ function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
       <Show when={props.state.update.visible}>
         <TitlebarUpdateIconButton state={props.state.update} />
       </Show>
-      <div id="opencode-titlebar-right" class="flex shrink-0 items-center justify-end gap-0" />
+      <div id="opencode-titlebar-right" class="flex shrink-0 items-center justify-end gap-0">
+        <GitHubProjectsMenu />
+      </div>
     </div>
   )
 }
