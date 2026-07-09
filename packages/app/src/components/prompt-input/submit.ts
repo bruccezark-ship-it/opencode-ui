@@ -36,6 +36,7 @@ export type FollowupDraft = {
   agent: string
   model: { providerID: string; modelID: string }
   variant?: string
+  textMetadata?: Record<string, unknown>
 }
 
 type FollowupSendInput = {
@@ -109,6 +110,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     context: input.draft.context,
     images,
     text,
+    textMetadata: input.draft.textMetadata,
     sessionID: input.draft.sessionID,
     messageID,
     sessionDirectory: input.draft.sessionDirectory,
@@ -154,6 +156,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
 
     await input.client.session.promptAsync({
       sessionID: input.draft.sessionID,
+      directory: input.draft.sessionDirectory,
       agent: input.draft.agent,
       model: input.draft.model,
       messageID,

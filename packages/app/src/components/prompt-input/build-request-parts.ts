@@ -24,6 +24,7 @@ type BuildRequestPartsInput = {
   context: ContextFile[]
   images: ImageAttachmentPart[]
   text: string
+  textMetadata?: Record<string, unknown>
   messageID: string
   sessionID: string
   sessionDirectory: string
@@ -94,6 +95,7 @@ export function buildRequestParts(input: BuildRequestPartsInput) {
       id: Identifier.ascending("part"),
       type: "text",
       text: input.text,
+      metadata: input.textMetadata,
     },
   ]
 

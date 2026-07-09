@@ -2,6 +2,8 @@ import { createEffect, createMemo, createResource, createSignal, For, onCleanup,
 
 import { createStore } from "solid-js/store"
 
+import { useParams } from "@solidjs/router"
+
 import { IconButton } from "@opencode-ai/ui/icon-button"
 
 import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
@@ -23,6 +25,19 @@ import { useSDK } from "@/context/sdk"
 import { useServerSDK } from "@/context/server-sdk"
 
 import { useSync } from "@/context/sync"
+
+import { useServerSync } from "@/context/server-sync"
+
+import { useLocal } from "@/context/local"
+
+import { sendFollowupDraft } from "@/components/prompt-input/submit"
+
+import type { ImageAttachmentPart } from "@/context/prompt"
+
+import { showToast } from "@/utils/toast"
+import { formatServerError } from "@/utils/server-errors"
+
+import { uuid } from "@/utils/uuid"
 
 import {
 
@@ -52,6 +67,29 @@ import {
 
 } from "@/pages/session/preview-url"
 
+import { PreviewCaptureOverlay } from "@/pages/session/preview-capture-overlay"
+
+import {
+  buildPreviewMagicPrompt,
+  compositePreviewScreenshot,
+  computeSelectionBounds,
+  compressPreviewImage,
+  fullPreviewCaptureRect,
+  PREVIEW_MAGIC_COLORS,
+  PREVIEW_OUTLINE_MESSAGE,
+  PREVIEW_PARENT_READY,
+  requestPreviewLocation,
+  requestProxyPreviewCapture,
+  resolveEffectivePreviewUrl,
+  resolvePreviewSourceFiles,
+  sanitizePreviewUrl,
+  selectionCenter,
+  type PreviewCaptureResultPayload,
+  type PreviewMagicColorId,
+  type PreviewMark,
+  type PreviewOutlinePayload,
+} from "@/pages/session/preview-inspector"
+
 import { Persist, persisted } from "@/utils/persist"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 
@@ -65,12 +103,14 @@ export function SessionPreviewTab() {
 
   const language = useLanguage()
   const dialog = useDialog()
+  const params = useParams<{ id?: string }>()
+  const local = useLocal()
+  const sync = useSync()
+  const serverSync = useServerSync()
 
   const sdk = useSDK()
 
   const serverSDK = useServerSDK()
-
-  const sync = useSync()
 
 
 
@@ -109,6 +149,14 @@ export function SessionPreviewTab() {
   const [autoStart, setAutoStart] = createSignal(true)
 
   const [stopping, setStopping] = createSignal(false)
+
+  const [magicMode, setMagicMode] = createSignal(false)
+  const [magicSending, setMagicSending] = createSignal(false)
+  const [inspectorReady, setInspectorReady] = createSignal(false)
+  const [previewOutline, setPreviewOutline] = createSignal<PreviewOutlinePayload | undefined>()
+  const [livePreviewUrl, setLivePreviewUrl] = createSignal<string | undefined>()
+
+  let previewFrame: HTMLIFrameElement | undefined
 
 
 
@@ -239,19 +287,15 @@ export function SessionPreviewTab() {
 
 
   const activeUrl = createMemo(() => {
-
-    const override = normalizePreviewUrl(store.override)
-
+    const override = sanitizePreviewUrl(normalizePreviewUrl(store.override))
     if (override) return override
 
-    const resolved = normalizePreviewUrl(store.previewUrl)
-
+    const resolved = sanitizePreviewUrl(normalizePreviewUrl(store.previewUrl))
     if (resolved) return resolved
 
     if (!startPlan()) return ""
 
-    return previewTarget()?.url ?? ""
-
+    return sanitizePreviewUrl(previewTarget()?.url ?? "")
   })
 
 
@@ -435,9 +479,7 @@ export function SessionPreviewTab() {
 
 
   const commitUrl = () => {
-
-    const next = normalizePreviewUrl(draft())
-
+    const next = sanitizePreviewUrl(normalizePreviewUrl(draft()))
     if (!next) return
 
     setStore("override", next)
@@ -615,6 +657,190 @@ export function SessionPreviewTab() {
 
 
 
+  const notifyInspector = () => {
+    previewFrame?.contentWindow?.postMessage({ type: PREVIEW_PARENT_READY }, "*")
+  }
+
+  const magicColors = createMemo(() =>
+    PREVIEW_MAGIC_COLORS.map((color) => ({
+      id: color.id,
+      hex: color.hex,
+      label: language.t(`session.preview.magic.color.${color.id}`),
+    })),
+  )
+
+  const requestPreviewCapture = (input: {
+    previewUrl: string
+    bounds: { width: number; height: number }
+    selectionRect?: ReturnType<typeof computeSelectionBounds>
+  }) => {
+    const requestId = uuid()
+    const queryPoint = input.selectionRect ? selectionCenter(input.selectionRect) : undefined
+    return requestProxyPreviewCapture({
+      previewUrl: input.previewUrl,
+      appOrigin: window.location.origin,
+      rect: fullPreviewCaptureRect(input.bounds.width, input.bounds.height),
+      bounds: input.bounds,
+      requestId,
+      queryPoint,
+    })
+  }
+
+  const handleMagicSubmit = async (input: {
+    marks: PreviewMark[]
+    color: string
+    colorId: PreviewMagicColorId
+    prompt: string
+    bounds: { width: number; height: number }
+  }) => {
+    const sessionID = params.id
+    if (!sessionID) {
+      showToast({
+        title: language.t("session.preview.magic.noSession"),
+        variant: "error",
+      })
+      return
+    }
+
+    const currentAgent = local.agent.current()
+    const currentModel = local.model.current()
+    if (!currentAgent?.name || !currentModel) {
+      showToast({
+        title: language.t("session.preview.magic.noModel"),
+        variant: "error",
+      })
+      return
+    }
+
+    const previewUrl = activeUrl()
+    if (!previewUrl) return
+
+    setMagicSending(true)
+
+    try {
+      const selectionRect = computeSelectionBounds(input.marks, input.bounds)
+      if (!selectionRect) {
+        throw new Error("preview-selection-empty")
+      }
+
+      const outline = previewOutline()
+      const queried = await requestPreviewLocation({ frame: previewFrame })
+      const draftUrl = sanitizePreviewUrl(normalizePreviewUrl(draft()))
+      const pageUrl = resolveEffectivePreviewUrl({
+        baseUrl: previewUrl,
+        outlineUrl: queried?.url ?? outline?.url ?? (draftUrl !== previewUrl ? draftUrl : undefined),
+        pathname: queried?.pathname ?? outline?.pathname,
+      })
+
+      const result = await requestPreviewCapture({
+        previewUrl: pageUrl,
+        bounds: input.bounds,
+        selectionRect,
+      })
+      if (!result.dataUrl) {
+        throw new Error(result.error || "preview-capture-empty")
+      }
+
+      const resolvedUrl = resolveEffectivePreviewUrl({
+        baseUrl: previewUrl,
+        outlineUrl: queried?.url ?? outline?.url ?? (draftUrl !== previewUrl ? draftUrl : undefined),
+        captureUrl: result.url,
+        pathname: result.pathname ?? queried?.pathname ?? outline?.pathname,
+      })
+      const markedDataUrl = await compositePreviewScreenshot({
+        baseDataUrl: result.dataUrl,
+        marks: input.marks,
+        width: input.bounds.width,
+        height: input.bounds.height,
+        crop: selectionRect,
+      })
+      const dataUrl = await compressPreviewImage(markedDataUrl)
+
+      const structure = projectStructure()
+      const sourceFiles = structure ? resolvePreviewSourceFiles({ url: resolvedUrl, structure }) : []
+      const selectColorLabel = language.t(`session.preview.magic.color.${input.colorId}`)
+      const text = buildPreviewMagicPrompt({
+        userPrompt: input.prompt,
+        previewUrl: resolvedUrl,
+        sourceFiles,
+        selectColorLabel,
+        selectionRect,
+        targetElement: result.targetElement,
+        outline: result.outline ?? previewOutline(),
+      })
+
+      const image: ImageAttachmentPart = {
+        type: "image",
+        id: uuid(),
+        filename: "preview-marked.jpg",
+        mime: "image/jpeg",
+        dataUrl,
+      }
+
+      const context = sourceFiles.slice(0, 3).map((path) => ({
+        key: `file:${path}`,
+        type: "file" as const,
+        path,
+        preview: language.t("session.preview.magic.sourceFile", { path }),
+      }))
+
+      const ok = await sendFollowupDraft({
+        client: sdk().client,
+        sync: sync(),
+        serverSync: serverSync(),
+        draft: {
+          sessionID,
+          sessionDirectory: sdk().directory,
+          prompt: [{ type: "text", content: text, start: 0, end: text.length }, image],
+          context,
+          agent: currentAgent.name,
+          model: {
+            providerID: currentModel.provider.id,
+            modelID: currentModel.id,
+          },
+          variant: local.model.variant.current(),
+          textMetadata: {
+            "select-color": input.color,
+            "select-bounds": selectionRect,
+          },
+        },
+        optimisticBusy: true,
+      })
+
+      if (!ok) {
+        showToast({
+          title: language.t("session.preview.magic.sendFailed"),
+          description: language.t("session.preview.magic.sendFailed.description"),
+          variant: "error",
+        })
+        return
+      }
+
+      showToast({
+        title: language.t("session.preview.magic.sent"),
+      })
+      exitMagicMode()
+    } catch (error) {
+      const message = formatServerError(error, language.t)
+      const captureFailed =
+        message.includes("preview-capture") ||
+        message.includes("preview-selection") ||
+        message.includes("screenshot") ||
+        message.includes("Preview unavailable")
+      showToast({
+        title: language.t(
+          captureFailed ? "session.preview.magic.captureFailed" : "session.preview.magic.sendFailed",
+        ),
+        description: captureFailed
+          ? language.t("session.preview.magic.captureFailed.description")
+          : message || language.t("session.preview.magic.sendFailed.description"),
+        variant: "error",
+      })
+    } finally {
+      setMagicSending(false)
+    }
+  }
+
   const statusKey = createMemo(() => previewPhaseMessageKey(phase()))
 
   const showIframe = createMemo(() => {
@@ -623,6 +849,16 @@ export function SessionPreviewTab() {
     if (store.override) return reachable() === true
     return phase() === "ready"
   })
+
+  const iframeSrc = createMemo(() => activeUrl())
+
+  const exitMagicMode = () => {
+    setMagicMode(false)
+  }
+
+  const enterMagicMode = () => {
+    setMagicMode(true)
+  }
 
   const showStatusBar = createMemo(
 
@@ -643,6 +879,31 @@ export function SessionPreviewTab() {
   })
 
 
+
+  createEffect(() => {
+    activeUrl()
+    setMagicMode(false)
+    setInspectorReady(false)
+    setPreviewOutline(undefined)
+  })
+
+  createEffect(() => {
+    activeUrl()
+    reloadKey()
+    if (!showIframe()) return
+
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data
+      if (!data || typeof data !== "object") return
+      if (data.type === PREVIEW_OUTLINE_MESSAGE) {
+        setInspectorReady(true)
+        setPreviewOutline(data as PreviewOutlinePayload)
+      }
+    }
+
+    window.addEventListener("message", onMessage)
+    onCleanup(() => window.removeEventListener("message", onMessage))
+  })
 
   return (
 
@@ -845,6 +1106,22 @@ export function SessionPreviewTab() {
           </TooltipV2>
         </Show>
 
+        <Show when={showIframe()}>
+          <TooltipV2 value={language.t("session.preview.magic")}>
+            <IconButtonV2
+              variant={magicMode() ? "contrast" : "ghost"}
+              size="small"
+              icon={<Icon name="magic" />}
+              aria-label={language.t("session.preview.magic")}
+              aria-pressed={magicMode()}
+              onClick={() => {
+                if (magicMode()) exitMagicMode()
+                else enterMagicMode()
+              }}
+            />
+          </TooltipV2>
+        </Show>
+
         <TooltipV2 value={language.t("session.preview.openExternal")}>
 
           <IconButton
@@ -973,19 +1250,49 @@ export function SessionPreviewTab() {
 
               <Show when={showIframe()}>
 
-                <iframe
+                <div class="relative flex-1 min-h-0 w-full">
 
-                  key={`${reloadKey()}:${url()}`}
+                  <iframe
 
-                  src={url()}
+                    ref={previewFrame}
 
-                  title={language.t("session.tab.preview")}
+                    key={`${reloadKey()}:${url()}`}
 
-                  class="flex-1 min-h-0 w-full border-0 bg-background-base"
+                    src={iframeSrc()}
 
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                    title={language.t("session.tab.preview")}
 
-                />
+                    class="absolute inset-0 w-full h-full border-0 bg-background-base"
+
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+
+                    onLoad={() => notifyInspector()}
+
+                  />
+
+                  <PreviewCaptureOverlay
+                    active={magicMode()}
+                    hint={language.t("session.preview.magic.hint")}
+                    modeRectLabel={language.t("session.preview.magic.modeRect")}
+                    modeFreehandLabel={language.t("session.preview.magic.modeFreehand")}
+                    undoLabel={language.t("session.preview.magic.undo")}
+                    clearLabel={language.t("session.preview.magic.clear")}
+                    colors={magicColors()}
+                    promptPlaceholder={language.t("session.preview.magic.promptPlaceholder")}
+                    promptLabel={language.t("session.preview.magic.promptLabel")}
+                    selectFirstHint={language.t("session.preview.magic.selectFirstHint")}
+                    submitLabel={
+                      magicSending()
+                        ? language.t("session.preview.magic.sending")
+                        : language.t("session.preview.magic.submit")
+                    }
+                    cancelLabel={language.t("common.cancel")}
+                    sending={magicSending()}
+                    onCancel={exitMagicMode}
+                    onSubmit={(input) => void handleMagicSubmit(input)}
+                  />
+
+                </div>
 
               </Show>
 
