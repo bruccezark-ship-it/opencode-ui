@@ -79,6 +79,12 @@ export function buildGitflowManifest(files: Record<string, string>) {
   )
 }
 
+export function buildBinaryManifest(files: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(files).map(([path, base64]) => [normalizeRelativePath(path), base64]),
+  )
+}
+
 function buildRootedScript(projectRoot: string, body: string) {
   return [
     'const fs=require("fs")',
@@ -124,16 +130,14 @@ async function runPtyScript(input: {
   throw lastError ?? new Error(input.errorMessage)
 }
 
-/**
- * 通过 opencode serve 的 PTY 在服务端机器写入文件。
- * directory = SDK 会话目录；脚本内用 ROOT 绝对路径写文件，不依赖 PTY cwd。
- */
-export async function writeGitflowFiles(input: {
+async function writeHostManifest(input: {
   client: DirectorySDK["client"]
   directory: string
   projectRoot: string
   projectRelativeDir?: string
-  files: Record<string, string>
+  manifest: Record<string, string>
+  tempDirPrefix: string
+  finalizeErrorMessage: string
 }) {
   const serveProjectRoot = resolveServeProjectRoot(
     input.directory,
@@ -141,9 +145,8 @@ export async function writeGitflowFiles(input: {
     input.projectRelativeDir,
   )
   const sessionId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-  const tempDir = `${TEMP_DIR}/${sessionId}`
-  const tempPayload = `${tempDir}/manifest.b64`
-  const manifestPayload = utf8ToBase64(JSON.stringify(buildGitflowManifest(input.files)))
+  const tempDir = `${input.tempDirPrefix}/${sessionId}`
+  const manifestPayload = utf8ToBase64(JSON.stringify(input.manifest))
   const chunks = splitBase64(manifestPayload)
 
   await runPtyScript({
@@ -180,7 +183,7 @@ export async function writeGitflowFiles(input: {
       "for (const [rel, encoded] of Object.entries(manifest)) {",
       "  const full=path.join(ROOT, rel)",
       "  fs.mkdirSync(path.dirname(full), { recursive: true })",
-      '  fs.writeFileSync(full, Buffer.from(encoded, "base64"), "utf8")',
+      '  fs.writeFileSync(full, Buffer.from(encoded, "base64"))',
       "}",
       `fs.rmSync(path.join(ROOT, ${JSON.stringify(tempDir)}), { recursive: true, force: true })`,
     ].join(";"),
@@ -190,7 +193,50 @@ export async function writeGitflowFiles(input: {
     client: input.client,
     directory: input.directory,
     script: finalizeScript,
-    errorMessage: `无法写入文件 (${Object.keys(input.files).join(", ")})`,
+    errorMessage: input.finalizeErrorMessage,
+  })
+}
+
+/**
+ * 通过 opencode serve 的 PTY 在服务端机器写入文件。
+ * directory = SDK 会话目录；脚本内用 ROOT 绝对路径写文件，不依赖 PTY cwd。
+ */
+export async function writeGitflowFiles(input: {
+  client: DirectorySDK["client"]
+  directory: string
+  projectRoot: string
+  projectRelativeDir?: string
+  files: Record<string, string>
+}) {
+  await writeHostManifest({
+    client: input.client,
+    directory: input.directory,
+    projectRoot: input.projectRoot,
+    projectRelativeDir: input.projectRelativeDir,
+    manifest: buildGitflowManifest(input.files),
+    tempDirPrefix: TEMP_DIR,
+    finalizeErrorMessage: `无法写入文件 (${Object.keys(input.files).join(", ")})`,
+  })
+}
+
+const HOST_BINARY_TEMP_DIR = ".opencode-host-write"
+
+/** 通过 PTY 将 base64 编码的二进制文件写入宿主机项目目录。 */
+export async function writeHostBinaryFiles(input: {
+  client: DirectorySDK["client"]
+  directory: string
+  projectRoot: string
+  projectRelativeDir?: string
+  files: Record<string, string>
+}) {
+  await writeHostManifest({
+    client: input.client,
+    directory: input.directory,
+    projectRoot: input.projectRoot,
+    projectRelativeDir: input.projectRelativeDir,
+    manifest: buildBinaryManifest(input.files),
+    tempDirPrefix: HOST_BINARY_TEMP_DIR,
+    finalizeErrorMessage: `无法写入文件 (${Object.keys(input.files).join(", ")})`,
   })
 }
 

@@ -158,6 +158,39 @@ describe("preview-inspector", () => {
     expect(prompt).toContain("把按钮改成红色")
   })
 
+  test("buildPreviewMagicPrompt mentions reference attachments", () => {
+    const prompt = buildPreviewMagicPrompt({
+      userPrompt: "将选区图片替换为该图片",
+      previewUrl: "http://localhost:5173/",
+      sourceFiles: ["packages/app/src/App.tsx"],
+      selectColorLabel: "红色",
+      referenceAttachments: [{ filename: "logo.png" }],
+    })
+    expect(prompt).toContain("参考附件")
+    expect(prompt).toContain("logo.png")
+    expect(prompt).toContain("第 2 张及之后的图片")
+  })
+
+  test("buildPreviewMagicPrompt mentions saved host attachment paths", () => {
+    const prompt = buildPreviewMagicPrompt({
+      userPrompt: "将选区图片替换为该图片",
+      previewUrl: "http://localhost:5173/",
+      sourceFiles: ["packages/app/src/App.tsx"],
+      selectColorLabel: "红色",
+      referenceAttachments: [
+        {
+          filename: "git-push.png",
+          path: "apps/sidaier/public/images/git-push.png",
+          webPath: "/images/git-push.png",
+        },
+      ],
+    })
+    expect(prompt).toContain("不要尝试用 write/edit 工具保存或生成 PNG/JPG 等二进制图片")
+    expect(prompt).toContain("apps/sidaier/public/images/git-push.png")
+    expect(prompt).toContain("Web 引用路径：/images/git-push.png")
+    expect(prompt).toContain("无需再次写入二进制内容")
+  })
+
   test("sanitizePreviewUrl strips nested proxy paths on preview origin", () => {
     expect(sanitizePreviewUrl("http://localhost:5173/__opencode_preview__/localhost/5173/about")).toBe(
       "http://localhost:5173/about",

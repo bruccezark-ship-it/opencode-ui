@@ -39,7 +39,26 @@
       top: box.top,
       width: box.width,
       height: box.height,
+      assetSrc: assetSrc(target),
     }
+  }
+
+  function assetSrc(el) {
+    var tag = el.tagName ? el.tagName.toLowerCase() : ""
+    if (tag === "img") {
+      var src = el.currentSrc || el.src || ""
+      return src && src.indexOf("data:") !== 0 ? src : ""
+    }
+    if (tag === "picture") {
+      var img = el.querySelector("img")
+      if (!img) return ""
+      var pictureSrc = img.currentSrc || img.src || ""
+      return pictureSrc && pictureSrc.indexOf("data:") !== 0 ? pictureSrc : ""
+    }
+    var style = window.getComputedStyle(el)
+    var match = /url\(["']?([^"')]+)["']?\)/i.exec(style.backgroundImage || "")
+    if (!match || !match[1] || match[1].indexOf("data:") === 0) return ""
+    return match[1]
   }
 
   function selector(el) {

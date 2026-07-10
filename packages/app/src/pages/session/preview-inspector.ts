@@ -36,6 +36,7 @@ export type PreviewTargetElement = {
   top: number
   width: number
   height: number
+  assetSrc?: string
 }
 
 export const PREVIEW_SELECTION_PADDING = 24
@@ -411,6 +412,7 @@ export function buildPreviewMagicPrompt(input: {
   selectionRect?: PreviewCaptureRect
   targetElement?: PreviewTargetElement
   outline?: PreviewOutlinePayload | PreviewCaptureResultPayload["outline"]
+  referenceAttachments?: Array<{ filename: string; path?: string; webPath?: string }>
 }) {
   const trimmed = input.userPrompt.trim()
   const primary = input.sourceFiles[0]
@@ -449,9 +451,26 @@ export function buildPreviewMagicPrompt(input: {
     lines.push(`页面标题：${input.outline.title}`)
   }
 
+  if (input.referenceAttachments && input.referenceAttachments.length > 0) {
+    const saved = input.referenceAttachments.filter((item) => item.path)
+    if (saved.length > 0) {
+      lines.push("参考附件已由系统自动写入宿主机项目目录（不要尝试用 write/edit 工具保存或生成 PNG/JPG 等二进制图片）：")
+      for (const item of saved) {
+        const web = item.webPath ? `，Web 引用路径：${item.webPath}` : ""
+        lines.push(`- ${item.filename} → ${item.path}${web}`)
+      }
+    } else {
+      const names = input.referenceAttachments.map((item) => item.filename).join("、")
+      lines.push(`参考附件（消息中第 2 张及之后的图片）：${names}`)
+    }
+    lines.push(
+      "若用户要求替换图片，请直接在源码中更新 img/src 或 background-image 为上述 Web 引用路径；文件已存在于宿主机，无需再次写入二进制内容。",
+    )
+  }
+
   lines.push(
     "",
-    "截图已裁剪至选区附近，请优先修改目标元素及其直接相关的样式/文案/结构，避免改动圈选区域以外的内容。",
+    "第 1 张图片为带标记的选区截图。请优先修改目标元素及其直接相关的样式/文案/结构，避免改动圈选区域以外的内容。",
   )
 
   return lines.join("\n")

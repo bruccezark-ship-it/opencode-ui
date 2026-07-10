@@ -36,7 +36,7 @@ export default function NewLayout(props: ParentProps) {
       <main class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-strict">
         <Suspense>{props.children}</Suspense>
       </main>
-      {import.meta.env.DEV && <DebugBar inline />}
+      {import.meta.env.DEV && import.meta.env.VITE_ENABLE_DEBUG_BAR === "1" && <DebugBar inline />}
       <HelpButton />
       <ToastRegion v2 />
     </div>

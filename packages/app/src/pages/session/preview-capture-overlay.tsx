@@ -3,8 +3,33 @@ import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon } from "@opencode-ai/ui/v2/icon"
 import { TextInputV2 } from "@opencode-ai/ui/v2/text-input-v2"
+import { attachmentMime } from "@/components/prompt-input/files"
+import { ACCEPTED_IMAGE_TYPES } from "@/constants/file-picker"
+import type { ImageAttachmentPart } from "@/context/prompt"
 import type { PreviewMagicColorId, PreviewMark, PreviewRectMark } from "@/pages/session/preview-inspector"
 import { normalizeCaptureRect } from "@/pages/session/preview-inspector"
+import { uuid } from "@/utils/uuid"
+
+const MAX_ATTACHMENTS = 3
+
+async function readImageAttachment(file: File): Promise<ImageAttachmentPart | null> {
+  const mime = await attachmentMime(file)
+  if (!mime?.startsWith("image/")) return null
+  const dataUrl = await new Promise<string>((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "")
+    reader.onerror = () => resolve("")
+    reader.readAsDataURL(file)
+  })
+  if (!dataUrl) return null
+  return {
+    type: "image",
+    id: uuid(),
+    filename: file.name,
+    mime,
+    dataUrl,
+  }
+}
 
 const FREEHAND_WIDTH = 3
 const RECT_STROKE_WIDTH = 2
@@ -27,6 +52,11 @@ export function PreviewCaptureOverlay(props: {
   colors: PreviewMagicColorOption[]
   promptPlaceholder: string
   promptLabel: string
+  attachmentLabel: string
+  uploadAttachmentLabel: string
+  removeAttachmentLabel: string
+  attachmentLimitLabel: string
+  invalidAttachmentLabel: string
   selectFirstHint: string
   submitLabel: string
   cancelLabel: string
@@ -37,16 +67,20 @@ export function PreviewCaptureOverlay(props: {
     color: string
     colorId: PreviewMagicColorId
     prompt: string
+    attachments: ImageAttachmentPart[]
     bounds: { width: number; height: number }
   }) => void
 }) {
   let container: HTMLDivElement | undefined
   let canvas: HTMLCanvasElement | undefined
   let promptPanel: HTMLFormElement | undefined
+  let fileInput: HTMLInputElement | undefined
 
   const [mode, setMode] = createSignal<PreviewMagicMode>("rect")
   const [colorId, setColorId] = createSignal<PreviewMagicColorId>(props.colors[0]?.id ?? "red")
   const [prompt, setPrompt] = createSignal("")
+  const [attachments, setAttachments] = createSignal<ImageAttachmentPart[]>([])
+  const [attachmentError, setAttachmentError] = createSignal("")
   const [marks, setMarks] = createSignal<PreviewMark[]>([])
   const [draftPoints, setDraftPoints] = createSignal<Array<{ x: number; y: number }>>([])
   const [draftRect, setDraftRect] = createSignal<{ startX: number; startY: number; endX: number; endY: number } | undefined>()
@@ -60,6 +94,8 @@ export function PreviewCaptureOverlay(props: {
     setDraftRect(undefined)
     setDrawing(false)
     setPrompt("")
+    setAttachments([])
+    setAttachmentError("")
     redraw()
   }
 
@@ -322,6 +358,37 @@ export function PreviewCaptureOverlay(props: {
 
   const canSubmit = () => marks().length > 0 && prompt().trim().length > 0 && !props.sending
 
+  const pickAttachments = () => {
+    if (props.sending || attachments().length >= MAX_ATTACHMENTS) return
+    fileInput?.click()
+  }
+
+  const addAttachments = async (files: FileList | File[]) => {
+    setAttachmentError("")
+    const list = Array.from(files)
+    if (list.length === 0) return
+
+    const next = [...attachments()]
+    for (const file of list) {
+      if (next.length >= MAX_ATTACHMENTS) {
+        setAttachmentError(props.attachmentLimitLabel)
+        break
+      }
+      const attachment = await readImageAttachment(file)
+      if (!attachment) {
+        setAttachmentError(props.invalidAttachmentLabel)
+        continue
+      }
+      next.push(attachment)
+    }
+    setAttachments(next)
+  }
+
+  const removeAttachment = (id: string) => {
+    setAttachments((items) => items.filter((item) => item.id !== id))
+    setAttachmentError("")
+  }
+
   const submit = () => {
     if (!container || !canSubmit()) return
     const bounds = container.getBoundingClientRect()
@@ -330,6 +397,7 @@ export function PreviewCaptureOverlay(props: {
       color: activeColor()!.hex,
       colorId: colorId(),
       prompt: prompt().trim(),
+      attachments: attachments(),
       bounds: { width: bounds.width, height: bounds.height },
     })
   }
@@ -446,6 +514,63 @@ export function PreviewCaptureOverlay(props: {
             <label class="text-12-medium text-text-base" for="preview-magic-prompt">
               {props.promptLabel}
             </label>
+            <input
+              ref={fileInput}
+              type="file"
+              accept={ACCEPTED_IMAGE_TYPES.join(",")}
+              multiple
+              class="hidden"
+              disabled={props.sending}
+              onChange={(event) => {
+                const files = event.currentTarget.files
+                if (files) void addAttachments(files)
+                event.currentTarget.value = ""
+              }}
+            />
+            <div class="flex flex-col gap-2">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-11-regular text-text-weak">{props.attachmentLabel}</span>
+                <ButtonV2
+                  type="button"
+                  size="small"
+                  variant="ghost"
+                  disabled={props.sending || attachments().length >= MAX_ATTACHMENTS}
+                  onClick={pickAttachments}
+                >
+                  {props.uploadAttachmentLabel}
+                </ButtonV2>
+              </div>
+              <Show when={attachments().length > 0}>
+                <div class="flex flex-wrap gap-2">
+                  <For each={attachments()}>
+                    {(attachment) => (
+                      <div class="relative group">
+                        <img
+                          src={attachment.dataUrl}
+                          alt={attachment.filename}
+                          class="size-14 rounded-md border border-border-weaker-base object-cover"
+                        />
+                        <button
+                          type="button"
+                          class="absolute -right-1 -top-1 flex size-5 items-center justify-center rounded-full border border-border-weaker-base bg-background-base opacity-0 transition-opacity group-hover:opacity-100"
+                          aria-label={props.removeAttachmentLabel}
+                          disabled={props.sending}
+                          onClick={() => removeAttachment(attachment.id)}
+                        >
+                          <Icon name="close" size="small" />
+                        </button>
+                        <span class="mt-1 block max-w-14 truncate text-10-regular text-text-weak">
+                          {attachment.filename}
+                        </span>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
+              <Show when={attachmentError()}>
+                <p class="text-11-regular text-text-danger">{attachmentError()}</p>
+              </Show>
+            </div>
             <TextInputV2
               id="preview-magic-prompt"
               appearance="large"

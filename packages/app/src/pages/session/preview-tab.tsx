@@ -69,6 +69,8 @@ import {
 
 import { PreviewCaptureOverlay } from "@/pages/session/preview-capture-overlay"
 
+import { savePreviewAttachmentsToHost, resolvePreviewAttachmentWebPath } from "@/pages/session/preview-attachments"
+
 import {
   buildPreviewMagicPrompt,
   compositePreviewScreenshot,
@@ -691,6 +693,7 @@ export function SessionPreviewTab() {
     color: string
     colorId: PreviewMagicColorId
     prompt: string
+    attachments: ImageAttachmentPart[]
     bounds: { width: number; height: number }
   }) => {
     const sessionID = params.id
@@ -759,6 +762,20 @@ export function SessionPreviewTab() {
       const structure = projectStructure()
       const sourceFiles = structure ? resolvePreviewSourceFiles({ url: resolvedUrl, structure }) : []
       const selectColorLabel = language.t(`session.preview.magic.color.${input.colorId}`)
+
+      let savedAttachments = input.attachments
+      if (input.attachments.length > 0) {
+        savedAttachments = await savePreviewAttachmentsToHost({
+          client: sdk().client,
+          directory: sdk().directory,
+          projectRoot: gitflowProjectRoot(),
+          projectRelativeDir: gitflowProjectRelative() || undefined,
+          structure: structure ?? undefined,
+          targetElement: result.targetElement,
+          attachments: input.attachments,
+        })
+      }
+
       const text = buildPreviewMagicPrompt({
         userPrompt: input.prompt,
         previewUrl: resolvedUrl,
@@ -767,9 +784,14 @@ export function SessionPreviewTab() {
         selectionRect,
         targetElement: result.targetElement,
         outline: result.outline ?? previewOutline(),
+        referenceAttachments: savedAttachments.map((item) => ({
+          filename: item.filename,
+          path: item.sourcePath,
+          webPath: item.sourcePath ? resolvePreviewAttachmentWebPath(item.sourcePath) : undefined,
+        })),
       })
 
-      const image: ImageAttachmentPart = {
+      const screenshot: ImageAttachmentPart = {
         type: "image",
         id: uuid(),
         filename: "preview-marked.jpg",
@@ -777,12 +799,29 @@ export function SessionPreviewTab() {
         dataUrl,
       }
 
-      const context = sourceFiles.slice(0, 3).map((path) => ({
-        key: `file:${path}`,
-        type: "file" as const,
-        path,
-        preview: language.t("session.preview.magic.sourceFile", { path }),
-      }))
+      const context = [
+        ...sourceFiles.slice(0, 3).map((path) => ({
+          key: `file:${path}`,
+          type: "file" as const,
+          path,
+          preview: language.t("session.preview.magic.sourceFile", { path }),
+        })),
+        ...savedAttachments.flatMap((attachment) => {
+          const path = attachment.sourcePath
+          if (!path) return []
+          return [
+            {
+              key: `file:${path}`,
+              type: "file" as const,
+              path,
+              preview: language.t("session.preview.magic.savedAttachment", {
+                path,
+                filename: attachment.filename,
+              }),
+            },
+          ]
+        }),
+      ]
 
       const ok = await sendFollowupDraft({
         client: sdk().client,
@@ -791,7 +830,11 @@ export function SessionPreviewTab() {
         draft: {
           sessionID,
           sessionDirectory: sdk().directory,
-          prompt: [{ type: "text", content: text, start: 0, end: text.length }, image],
+          prompt: [
+            { type: "text", content: text, start: 0, end: text.length },
+            screenshot,
+            ...savedAttachments,
+          ],
           context,
           agent: currentAgent.name,
           model: {
@@ -827,13 +870,24 @@ export function SessionPreviewTab() {
         message.includes("preview-selection") ||
         message.includes("screenshot") ||
         message.includes("Preview unavailable")
+      const attachmentSaveFailed =
+        message.includes("无法写入文件") ||
+        message.includes("无法上传生成文件") ||
+        message.includes("无法在 opencode serve 上准备写入目录") ||
+        message.includes("写入文件超时")
       showToast({
         title: language.t(
-          captureFailed ? "session.preview.magic.captureFailed" : "session.preview.magic.sendFailed",
+          captureFailed
+            ? "session.preview.magic.captureFailed"
+            : attachmentSaveFailed
+              ? "session.preview.magic.attachmentSaveFailed"
+              : "session.preview.magic.sendFailed",
         ),
         description: captureFailed
           ? language.t("session.preview.magic.captureFailed.description")
-          : message || language.t("session.preview.magic.sendFailed.description"),
+          : attachmentSaveFailed
+            ? language.t("session.preview.magic.attachmentSaveFailed.description")
+            : message || language.t("session.preview.magic.sendFailed.description"),
         variant: "error",
       })
     } finally {
@@ -1280,6 +1334,11 @@ export function SessionPreviewTab() {
                     colors={magicColors()}
                     promptPlaceholder={language.t("session.preview.magic.promptPlaceholder")}
                     promptLabel={language.t("session.preview.magic.promptLabel")}
+                    attachmentLabel={language.t("session.preview.magic.attachmentLabel")}
+                    uploadAttachmentLabel={language.t("session.preview.magic.uploadAttachment")}
+                    removeAttachmentLabel={language.t("session.preview.magic.removeAttachment")}
+                    attachmentLimitLabel={language.t("session.preview.magic.attachmentLimit")}
+                    invalidAttachmentLabel={language.t("session.preview.magic.invalidAttachment")}
                     selectFirstHint={language.t("session.preview.magic.selectFirstHint")}
                     submitLabel={
                       magicSending()
